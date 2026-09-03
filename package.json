@@ -1,7 +1,7 @@
 {
   "name": "authz-gatekeeper",
   "version": "1.0.0",
-  "description": "",
+  "description": "Automated security gatekeeper for fine-grained authorization and multi-tenant isolation testing in CI/CD pipelines.",
   "homepage": "https://github.com/wang2989/authz-gatekeeper#readme",
   "bugs": {
     "url": "https://github.com/wang2989/authz-gatekeeper/issues"
@@ -12,9 +12,19 @@
   },
   "license": "MIT",
   "author": "",
-  "type": "commonjs",
-  "main": "index.js",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": "./src/index.js",
+  "bin": {
+    "gatekeeper": "./bin/gatekeeper.js"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/**/*.test.js"
+  },
+  "dependencies": {
+    "yaml": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }
