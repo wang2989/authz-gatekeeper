@@ -101,9 +101,11 @@ export async function checkTargetReadiness({
     }
   }
 
-  const durationSec = Math.round(timeoutMs / 1000);
+  const durationSec = ((Date.now() - startTime) / 1000).toFixed(2);
+  const configuredTimeoutSec = (timeoutMs / 1000).toFixed(2);
   const error = new Error(
-    `Target service at ${targetUrl} was unreachable after ${durationSec} seconds (${attempts} attempts).\n` +
+    `Target service at ${targetUrl} was unreachable after ${durationSec}s ` +
+    `(configured timeout: ${configuredTimeoutSec}s, ${attempts} attempts).\n` +
     `Last error: ${lastError ? lastError.message : 'Unknown error'}\n\n` +
     `Troubleshooting:\n` +
     `  • Verify that your local application server is running and listening on ${targetUrl}\n` +

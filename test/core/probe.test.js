@@ -107,6 +107,7 @@ describe('Target Readiness Probe (src/core/probe.js)', () => {
         assert.equal(err.code, 'ERR_TARGET_UNREACHABLE');
         assert.equal(err.exitCode, 2);
         assert.match(err.message, /Target service at http:\/\/127.0.0.1:59999 was unreachable/);
+        assert.match(err.message, /was unreachable after \d+\.\d{2}s \(configured timeout: 0\.60s, \d+ attempts\)/);
         return true;
       }
     );
