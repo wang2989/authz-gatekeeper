@@ -18,7 +18,7 @@
  * @param {number} [options.intervalMs=1000] - Wait duration between polling attempts
  * @param {string} [options.specUrl] - Optional HTTP URL to OpenAPI spec
  * @param {function} [options.log] - Optional logger function
- * @returns {Promise<{ ready: boolean, endpoint: string, status: number, attempts: number, durationMs: number }>}
+ * @returns {Promise<{ ready: boolean, endpoint: string, status: number, attempts: number, durationMs: number, fallback?: boolean }>}
  */
 export async function checkTargetReadiness({
   targetUrl,
@@ -51,6 +51,7 @@ export async function checkTargetReadiness({
           ready: true,
           endpoint: primaryUrl,
           status: res.status,
+          fallback: false,
           attempts,
           durationMs: Date.now() - startTime,
         };
