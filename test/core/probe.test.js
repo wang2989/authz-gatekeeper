@@ -32,6 +32,17 @@ describe('Target Readiness Probe (src/core/probe.js)', () => {
     });
   }
 
+  function getUnusedPort() {
+    return new Promise((resolve, reject) => {
+      const server = http.createServer();
+      server.listen(0, '127.0.0.1', () => {
+        const port = server.address().port;
+        server.close(() => resolve(port));
+      });
+      server.on('error', reject);
+    });
+  }
+
   it('resolves immediately when /health returns 200 OK', async () => {
     const { url } = await startMockServer((req, res) => {
       if (req.url === '/health') {
@@ -101,8 +112,8 @@ describe('Target Readiness Probe (src/core/probe.js)', () => {
   });
 
   it('throws ERR_TARGET_UNREACHABLE with exitCode 2 when service does not respond in time', async () => {
-    // Pick an unused random port
-    const unreachableUrl = 'http://127.0.0.1:59999';
+    const unusedPort = await getUnusedPort();
+    const unreachableUrl = `http://127.0.0.1:${unusedPort}`;
 
     await assert.rejects(
       () =>
@@ -114,7 +125,7 @@ describe('Target Readiness Probe (src/core/probe.js)', () => {
       (err) => {
         assert.equal(err.code, 'ERR_TARGET_UNREACHABLE');
         assert.equal(err.exitCode, 2);
-        assert.match(err.message, /Target service at http:\/\/127.0.0.1:59999 was unreachable/);
+        assert.match(err.message, new RegExp(`Target service at http:\\/\\/127\\.0\\.0\\.1:${unusedPort} was unreachable`));
         assert.match(err.message, /was unreachable after \d+\.\d{2}s \(configured timeout: 0\.60s, \d+ attempts\)/);
         return true;
       }
