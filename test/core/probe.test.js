@@ -6,10 +6,18 @@ import { checkTargetReadiness } from '../../src/core/probe.js';
 describe('Target Readiness Probe (src/core/probe.js)', () => {
   let activeServers = [];
 
-  afterEach(() => {
-    for (const server of activeServers) {
-      server.close();
-    }
+  afterEach(async () => {
+    await Promise.all(
+      activeServers.map(
+        (server) =>
+          new Promise((resolve) => {
+            if (typeof server.closeAllConnections === 'function') {
+              server.closeAllConnections();
+            }
+            server.close(() => resolve());
+          })
+      )
+    );
     activeServers = [];
   });
 
