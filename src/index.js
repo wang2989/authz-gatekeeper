@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseCliArgs, getHelpText } from './cli/args.js';
 import { checkTargetReadiness } from './core/probe.js';
+import { loadOpenApiSpec } from './parser/openapi-loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -69,8 +70,13 @@ export async function runCli(rawArgs = process.argv.slice(2), env = process.env)
       process.stdout.write(`⏩ Target readiness probe bypassed (--no-probe)\n\n`);
     }
 
-    // Phase 1 verification hook
-    process.stdout.write(`✨ Workspace ingestion and configuration validation complete.\n`);
+    // Schema Ingestion & Normalization
+    process.stdout.write(`📖 Ingesting OpenAPI specification from ${config.spec}...\n`);
+    const openApiSpec = await loadOpenApiSpec(config.spec);
+    const pathCount = Object.keys(openApiSpec.paths || {}).length;
+    process.stdout.write(`✅ Ingested "${openApiSpec.info.title}" (v${openApiSpec.info.version}) with ${pathCount} endpoints defined.\n\n`);
+
+    process.stdout.write(`✨ Workspace ingestion and schema validation complete.\n`);
     return 0;
   } catch (err) {
     process.stderr.write(`\n❌ Gatekeeper Execution Failure:\n${err.message}\n\n`);
