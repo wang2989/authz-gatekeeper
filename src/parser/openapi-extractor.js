@@ -136,35 +136,35 @@ export function extractSecurity(operationObj, rootSecurity = []) {
   const hasExplicitOpSecurity = operationObj && Array.isArray(operationObj.security);
 
   let securityRequirements = [];
-  let isAnonymous = false;
 
   if (hasExplicitOpSecurity) {
-    if (operationObj.security.length === 0) {
-      // In OpenAPI standard, operation-level `security: []` explicitly declares an unauthenticated/public route
-      isAnonymous = true;
-      securityRequirements = [];
-    } else {
-      isAnonymous = false;
-      securityRequirements = operationObj.security;
-    }
+    securityRequirements = operationObj.security;
   } else if (globalSec.length > 0) {
-    isAnonymous = false;
     securityRequirements = globalSec;
   } else {
-    // Neither operation nor root defines security requirements
-    isAnonymous = true;
     securityRequirements = [];
   }
+
+  // An endpoint allows anonymous access if:
+  // 1. Neither operation nor root defines security (securityRequirements is empty)
+  // 2. Explicit operation security: [] (disables root security)
+  // 3. Any Security Requirement Object is empty `{}` (OpenAPI standard for anonymous alternative)
+  // 4. Explicit vendor override: `x-allow-anonymous: true`
+  const allowsAnonymousRequirement = securityRequirements.some(
+    (req) => req && typeof req === 'object' && !Array.isArray(req) && Object.keys(req).length === 0
+  );
+
+  let isAnonymous = securityRequirements.length === 0 || allowsAnonymousRequirement;
 
   // Explicit vendor override
   if (operationObj && Boolean(operationObj['x-allow-anonymous'])) {
     isAnonymous = true;
   }
 
-  // Extract OAuth2 / OIDC scopes from active security requirements
+  // Extract OAuth2 / OIDC scopes from active security requirements (skipping empty objects)
   const scopeSet = new Set();
   for (const secRequirement of securityRequirements) {
-    if (secRequirement && typeof secRequirement === 'object') {
+    if (secRequirement && typeof secRequirement === 'object' && !Array.isArray(secRequirement)) {
       for (const scopes of Object.values(secRequirement)) {
         if (Array.isArray(scopes)) {
           for (const s of scopes) {

@@ -83,6 +83,21 @@ describe('OpenAPI Route & Security Annotation Extractor (src/parser/openapi-extr
       assert.equal(isAnonymous, true);
     });
 
+    it('identifies operation with empty Security Requirement Object [{}] as anonymous/public', () => {
+      const { isAnonymous, securityRequirements } = extractSecurity({ security: [{}] }, [{ bearerAuth: [] }]);
+      assert.equal(isAnonymous, true);
+      assert.deepEqual(securityRequirements, [{}]);
+    });
+
+    it('identifies operation with optional authentication [{ bearerAuth: [] }, {}] as anonymous', () => {
+      const { isAnonymous, securityRequirements } = extractSecurity(
+        { security: [{ bearerAuth: [] }, {}] },
+        [{ bearerAuth: [] }]
+      );
+      assert.equal(isAnonymous, true);
+      assert.deepEqual(securityRequirements, [{ bearerAuth: [] }, {}]);
+    });
+
     it('identifies operation with x-allow-anonymous: true as anonymous', () => {
       const { isAnonymous } = extractSecurity(
         { 'x-allow-anonymous': true, security: [{ bearerAuth: [] }] },
@@ -99,6 +114,30 @@ describe('OpenAPI Route & Security Annotation Extractor (src/parser/openapi-extr
       assert.equal(isAnonymous, false);
       assert.deepEqual(securityRequirements, [{ oauth2: ['read:projects', 'write:projects'] }]);
       assert.deepEqual(requiredScopes, ['read:projects', 'write:projects']);
+    });
+
+    it('identifies inherited root security with optional auth [..., {}] as anonymous', () => {
+      const { isAnonymous, securityRequirements } = extractSecurity(
+        {},
+        [{ bearerAuth: [] }, {}]
+      );
+      assert.equal(isAnonymous, true);
+      assert.deepEqual(securityRequirements, [{ bearerAuth: [] }, {}]);
+    });
+
+    it('identifies inherited root security with [{}] as anonymous', () => {
+      const { isAnonymous, securityRequirements } = extractSecurity({}, [{}]);
+      assert.equal(isAnonymous, true);
+      assert.deepEqual(securityRequirements, [{}]);
+    });
+
+    it('allows operation to override root security with strictly protected requirement', () => {
+      const { isAnonymous, securityRequirements } = extractSecurity(
+        { security: [{ bearerAuth: [] }] },
+        [{ bearerAuth: [] }, {}]
+      );
+      assert.equal(isAnonymous, false);
+      assert.deepEqual(securityRequirements, [{ bearerAuth: [] }]);
     });
 
     it('defaults to anonymous if neither operation nor root specifies security', () => {
