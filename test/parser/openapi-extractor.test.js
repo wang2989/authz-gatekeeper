@@ -140,6 +140,41 @@ describe('OpenAPI Route & Security Annotation Extractor (src/parser/openapi-extr
       assert.deepEqual(scopesPerRequirement[3], []);
     });
 
+    it('exposes scopesPerRequirement and securityRequirements on endpoints, with requiredScopes as non-flat alias', () => {
+      const spec = {
+        openapi: '3.0.3',
+        info: { title: 'Test Scope Groups', version: '1.0.0' },
+        paths: {
+          '/items': {
+            get: {
+              security: [
+                { oauth_admin: ['read:all', 'write:all'] },
+                { oauth_user: ['read:own'] },
+              ],
+              responses: { 200: { description: 'OK' } },
+            },
+          },
+        },
+      };
+
+      const [endpoint] = extractEndpoints(spec);
+      assert.ok(endpoint);
+      // Source of truth checks
+      assert.deepEqual(endpoint.securityRequirements, [
+        { oauth_admin: ['read:all', 'write:all'] },
+        { oauth_user: ['read:own'] },
+      ]);
+      assert.deepEqual(endpoint.scopesPerRequirement, [
+        ['read:all', 'write:all'],
+        ['read:own'],
+      ]);
+      // Non-flat alternative groups alias
+      assert.deepEqual(endpoint.requiredScopes, [
+        ['read:all', 'write:all'],
+        ['read:own'],
+      ]);
+    });
+
     it('identifies inherited root security with optional auth [..., {}] as anonymous', () => {
       const { isAnonymous, securityRequirements } = extractSecurity(
         {},

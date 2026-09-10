@@ -164,7 +164,7 @@ export function extractRoles(operationObj) {
  * 
  * @param {object} operationObj - OpenAPI Operation Object
  * @param {Array<object>} [rootSecurity=[]] - Global security requirements from spec root
- * @returns {{ isAnonymous: boolean, securityRequirements: Array<object>, scopesPerRequirement: Array<string[]>, requiredScopes: Array<string[]> }}
+ * @returns {{ isAnonymous: boolean, securityRequirements: Array<object>, scopesPerRequirement: Array<string[]> }}
  */
 export function extractSecurity(operationObj, rootSecurity = []) {
   const globalSec = Array.isArray(rootSecurity) ? rootSecurity : [];
@@ -218,7 +218,6 @@ export function extractSecurity(operationObj, rootSecurity = []) {
     isAnonymous,
     securityRequirements,
     scopesPerRequirement,
-    requiredScopes: scopesPerRequirement,
   };
 }
 
@@ -310,10 +309,30 @@ export function getPathItemOperations(pathItem, versionInfo = { isOpenApi32OrHig
 }
 
 /**
+ * @typedef {object} EndpointDefinition
+ * @property {string} path - Normalized route template e.g. "/api/v1/{tenant_id}/projects"
+ * @property {string} rawPath - Original route template
+ * @property {string} method - Normalized HTTP verb (GET, POST, QUERY, etc.)
+ * @property {string|null} operationId - OpenAPI operationId
+ * @property {string|null} summary - Operation summary
+ * @property {string|null} description - Operation description
+ * @property {string[]} tags - Operation tags
+ * @property {Array<object>} parameters - Merged path-level and operation-level parameters
+ * @property {string[]} pathParameters - Path template parameter names
+ * @property {string[]} requiredRoles - Extracted vendor roles
+ * @property {Array<object>} securityRequirements - Raw Security Requirement Objects preserving schemes & alternative (OR) semantics (source of truth)
+ * @property {Array<string[]>} scopesPerRequirement - Non-flat scope groups required per alternative in securityRequirements (source of truth)
+ * @property {Array<string[]>} [requiredScopes] - @deprecated Non-flat alternative scope groups. Downstream code should consume scopesPerRequirement / securityRequirements.
+ * @property {boolean} isAnonymous - Whether the operation allows unauthenticated access
+ * @property {boolean} hasRequestBody - Whether requestBody is defined
+ * @property {object|null} requestBodySchema - Extracted JSON/media payload schema
+ */
+
+/**
  * Traverses an OpenAPI specification object and extracts an array of endpoint operation definitions.
  * 
  * @param {object} openApiObj - Parsed and validated OpenAPI 3.0+ or Swagger 2.0 object
- * @returns {Array<object>} Array of structured EndpointDefinition objects
+ * @returns {Array<EndpointDefinition>} Array of structured EndpointDefinition objects
  */
 export function extractEndpoints(openApiObj) {
   if (!openApiObj || typeof openApiObj !== 'object' || !openApiObj.paths || typeof openApiObj.paths !== 'object') {
@@ -367,7 +386,10 @@ export function extractEndpoints(openApiObj) {
         requiredRoles,
         securityRequirements,
         scopesPerRequirement,
-        requiredScopes: scopesPerRequirement,
+        // Non-flat alternative groups; downstream code should consume scopesPerRequirement / securityRequirements
+        get requiredScopes() {
+          return this.scopesPerRequirement;
+        },
         isAnonymous,
         hasRequestBody: Boolean(operationObj.requestBody),
         requestBodySchema,
