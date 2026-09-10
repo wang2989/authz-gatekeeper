@@ -221,6 +221,48 @@ describe('OpenAPI Loader & Normalizer (src/parser/openapi-loader.js)', () => {
       );
     });
 
+    it('rejects incomplete or unanchored openapi version strings (e.g., 3.0, 3.0.3garbage, 3.0.0.1)', () => {
+      const invalidVersions = [
+        '3.0',
+        '3.1',
+        '3.0.3garbage',
+        '3.0.0.1',
+        '3.0.1extra',
+        '4.0.0',
+        '2.1.0',
+      ];
+
+      for (const ver of invalidVersions) {
+        assert.throws(
+          () =>
+            validateOpenApiStructure({
+              openapi: ver,
+              info: { title: 'Test', version: '1.0.0' },
+              paths: {},
+            }),
+          (err) => {
+            assert.equal(err.code, 'ERR_INVALID_SPEC');
+            assert.match(err.message, /Unsupported OpenAPI version/);
+            return true;
+          },
+          `Expected openapi version "${ver}" to be rejected.`
+        );
+      }
+    });
+
+    it('accepts valid 3-component semver openapi versions', () => {
+      const validVersions = ['3.0.0', '3.0.3', '3.1.0', '3.2.0', '3.1.0-rc1'];
+
+      for (const ver of validVersions) {
+        const result = validateOpenApiStructure({
+          openapi: ver,
+          info: { title: 'Test', version: '1.0.0' },
+          paths: {},
+        });
+        assert.equal(result.openapi, ver);
+      }
+    });
+
     it('throws InvalidSpecError when info title or version is missing', () => {
       assert.throws(
         () => validateOpenApiStructure({ openapi: '3.0.0', info: { version: '1.0' }, paths: {} }),

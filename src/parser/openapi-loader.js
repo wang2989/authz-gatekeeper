@@ -89,10 +89,10 @@ export function validateOpenApiStructure(specObj, sourceName = 'spec') {
   }
 
   if (hasOpenApi) {
-    const versionMatch = specObj.openapi.match(/^3\.\d+(\.\d+)?/);
+    const versionMatch = specObj.openapi.match(/^3\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$/);
     if (!versionMatch) {
       throw new InvalidSpecError(
-        `Unsupported OpenAPI version "${specObj.openapi}" in "${sourceName}". Gatekeeper requires OpenAPI 3.0+ (or Swagger 2.0).`
+        `Unsupported OpenAPI version "${specObj.openapi}" in "${sourceName}". Gatekeeper requires OpenAPI 3.x.x (or Swagger 2.0).`
       );
     }
   } else if (hasSwagger) {
