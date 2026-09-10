@@ -164,7 +164,7 @@ export function extractRoles(operationObj) {
  * 
  * @param {object} operationObj - OpenAPI Operation Object
  * @param {Array<object>} [rootSecurity=[]] - Global security requirements from spec root
- * @returns {{ isAnonymous: boolean, securityRequirements: Array<object>, requiredScopes: string[] }}
+ * @returns {{ isAnonymous: boolean, securityRequirements: Array<object>, scopesPerRequirement: Array<string[]>, requiredScopes: Array<string[]> }}
  */
 export function extractSecurity(operationObj, rootSecurity = []) {
   const globalSec = Array.isArray(rootSecurity) ? rootSecurity : [];
@@ -196,24 +196,29 @@ export function extractSecurity(operationObj, rootSecurity = []) {
     isAnonymous = true;
   }
 
-  // Extract OAuth2 / OIDC scopes from active security requirements (skipping empty objects)
-  const scopeSet = new Set();
-  for (const secRequirement of securityRequirements) {
-    if (secRequirement && typeof secRequirement === 'object' && !Array.isArray(secRequirement)) {
-      for (const scopes of Object.values(secRequirement)) {
-        if (Array.isArray(scopes)) {
-          for (const s of scopes) {
-            if (s && typeof s === 'string') scopeSet.add(s.trim());
+  // Extract OAuth2 / OIDC scopes per requirement alternative (preserving OR semantics)
+  const scopesPerRequirement = securityRequirements.map((secRequirement) => {
+    if (!secRequirement || typeof secRequirement !== 'object' || Array.isArray(secRequirement)) {
+      return [];
+    }
+    const altScopes = new Set();
+    for (const scopes of Object.values(secRequirement)) {
+      if (Array.isArray(scopes)) {
+        for (const s of scopes) {
+          if (typeof s === 'string' && s.trim().length > 0) {
+            altScopes.add(s.trim());
           }
         }
       }
     }
-  }
+    return Array.from(altScopes);
+  });
 
   return {
     isAnonymous,
     securityRequirements,
-    requiredScopes: Array.from(scopeSet),
+    scopesPerRequirement,
+    requiredScopes: scopesPerRequirement,
   };
 }
 
@@ -341,7 +346,7 @@ export function extractEndpoints(openApiObj) {
       const allPathParams = Array.from(new Set([...templatePathVars, ...declaredPathParams]));
 
       // Security & Anonymous Access
-      const { isAnonymous, securityRequirements, requiredScopes } = extractSecurity(operationObj, rootSecurity);
+      const { isAnonymous, securityRequirements, scopesPerRequirement } = extractSecurity(operationObj, rootSecurity);
 
       // Roles from vendor extensions
       const requiredRoles = extractRoles(operationObj);
@@ -360,8 +365,9 @@ export function extractEndpoints(openApiObj) {
         parameters: mergedParams,
         pathParameters: allPathParams,
         requiredRoles,
-        requiredScopes,
         securityRequirements,
+        scopesPerRequirement,
+        requiredScopes: scopesPerRequirement,
         isAnonymous,
         hasRequestBody: Boolean(operationObj.requestBody),
         requestBodySchema,

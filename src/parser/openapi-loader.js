@@ -117,9 +117,9 @@ export function validateOpenApiStructure(specObj, sourceName = 'spec') {
     );
   }
 
-  if (version === undefined || version === null || String(version).trim().length === 0) {
+  if (typeof version !== 'string' || version.trim().length === 0) {
     throw new InvalidSpecError(
-      `Invalid OpenAPI specification in "${sourceName}": "info.version" is required.`
+      `Invalid OpenAPI specification in "${sourceName}": "info.version" is required and must be a non-empty string.`
     );
   }
 

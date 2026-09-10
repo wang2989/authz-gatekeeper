@@ -109,13 +109,35 @@ describe('OpenAPI Route & Security Annotation Extractor (src/parser/openapi-extr
     });
 
     it('inherits root security requirements when operation security is omitted', () => {
-      const { isAnonymous, securityRequirements, requiredScopes } = extractSecurity(
+      const { isAnonymous, securityRequirements, scopesPerRequirement } = extractSecurity(
         {},
         [{ oauth2: ['read:projects', 'write:projects'] }]
       );
       assert.equal(isAnonymous, false);
       assert.deepEqual(securityRequirements, [{ oauth2: ['read:projects', 'write:projects'] }]);
-      assert.deepEqual(requiredScopes, ['read:projects', 'write:projects']);
+      assert.deepEqual(scopesPerRequirement, [['read:projects', 'write:projects']]);
+    });
+
+    it('preserves scopes per requirement alternative instead of flattening mutually exclusive schemes', () => {
+      const { isAnonymous, securityRequirements, scopesPerRequirement } = extractSecurity(
+        {
+          security: [
+            { oauth2_admin: ['admin:read', 'admin:write'] },
+            { oauth2_user: ['user:read'] },
+            { apiKey: [] },
+            {},
+          ],
+        },
+        []
+      );
+
+      assert.equal(isAnonymous, true);
+      assert.equal(securityRequirements.length, 4);
+      assert.equal(scopesPerRequirement.length, 4);
+      assert.deepEqual(scopesPerRequirement[0], ['admin:read', 'admin:write']);
+      assert.deepEqual(scopesPerRequirement[1], ['user:read']);
+      assert.deepEqual(scopesPerRequirement[2], []);
+      assert.deepEqual(scopesPerRequirement[3], []);
     });
 
     it('identifies inherited root security with optional auth [..., {}] as anonymous', () => {

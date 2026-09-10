@@ -241,6 +241,35 @@ describe('OpenAPI Loader & Normalizer (src/parser/openapi-loader.js)', () => {
       );
     });
 
+    it('rejects non-string or whitespace info.version values (numbers, booleans, arrays, objects)', () => {
+      const invalidVersions = [
+        1.0,
+        100,
+        true,
+        false,
+        ['1.0.0'],
+        { major: 1, minor: 0 },
+        '   ',
+      ];
+
+      for (const invalidVersion of invalidVersions) {
+        assert.throws(
+          () =>
+            validateOpenApiStructure({
+              openapi: '3.0.0',
+              info: { title: 'Test API', version: invalidVersion },
+              paths: {},
+            }),
+          (err) => {
+            assert.equal(err.code, 'ERR_INVALID_SPEC');
+            assert.match(err.message, /"info.version" is required and must be a non-empty string/);
+            return true;
+          },
+          `Expected info.version value "${JSON.stringify(invalidVersion)}" to be rejected.`
+        );
+      }
+    });
+
     it('accepts valid Swagger 2.0 specification', () => {
       const validSwagger2 = {
         swagger: '2.0',
