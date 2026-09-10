@@ -8,6 +8,8 @@ import {
   extractRoles,
   extractSecurity,
   extractRequestBodySchema,
+  detectSpecVersion,
+  getPathItemOperations,
   extractEndpoints,
 } from '../../src/parser/openapi-extractor.js';
 
@@ -267,6 +269,196 @@ describe('OpenAPI Route & Security Annotation Extractor (src/parser/openapi-extr
       assert.equal(endpoints.length, 1);
       assert.equal(endpoints[0].method, 'GET');
       assert.deepEqual(endpoints[0].pathParameters, ['tenant_id']);
+    });
+
+    it('extracts all 5 operations (including QUERY, LINK, UNLINK, PURGE) from openapi-3.2.fixture.yaml', async () => {
+      const spec = await loadOpenApiSpec('test/fixtures/openapi-3.2.fixture.yaml');
+      const endpoints = extractEndpoints(spec);
+
+      assert.equal(endpoints.length, 5);
+
+      // 1. QUERY /api/v1/search
+      const queryEndpoint = endpoints.find((e) => e.path === '/api/v1/search' && e.method === 'QUERY');
+      assert.ok(queryEndpoint);
+      assert.equal(queryEndpoint.operationId, 'searchQuery');
+      assert.deepEqual(queryEndpoint.requiredRoles, ['Member']);
+      assert.equal(queryEndpoint.hasRequestBody, true);
+      assert.deepEqual(queryEndpoint.requestBodySchema, {
+        $ref: '#/components/schemas/SearchQuery',
+      });
+
+      // 2. GET /api/v1/documents/{id}
+      const getDoc = endpoints.find((e) => e.path === '/api/v1/documents/{id}' && e.method === 'GET');
+      assert.ok(getDoc);
+      assert.deepEqual(getDoc.pathParameters, ['id']);
+
+      // 3. LINK /api/v1/documents/{id}
+      const linkDoc = endpoints.find((e) => e.path === '/api/v1/documents/{id}' && e.method === 'LINK');
+      assert.ok(linkDoc);
+      assert.equal(linkDoc.operationId, 'linkDocument');
+      assert.deepEqual(linkDoc.requiredRoles, ['Editor']);
+      assert.deepEqual(linkDoc.pathParameters, ['id']);
+
+      // 4. UNLINK /api/v1/documents/{id}
+      const unlinkDoc = endpoints.find((e) => e.path === '/api/v1/documents/{id}' && e.method === 'UNLINK');
+      assert.ok(unlinkDoc);
+      assert.equal(unlinkDoc.operationId, 'unlinkDocument');
+      assert.deepEqual(unlinkDoc.requiredRoles, ['Admin']);
+      assert.deepEqual(unlinkDoc.pathParameters, ['id']);
+
+      // 5. PURGE /api/v1/cache
+      const purgeCache = endpoints.find((e) => e.path === '/api/v1/cache' && e.method === 'PURGE');
+      assert.ok(purgeCache);
+      assert.equal(purgeCache.operationId, 'purgeCache');
+      assert.deepEqual(purgeCache.requiredRoles, ['SuperAdmin']);
+    });
+  });
+
+  describe('Spec Version Detection (detectSpecVersion)', () => {
+    it('detects OpenAPI 3.0.x as non-3.2', () => {
+      const info = detectSpecVersion({ openapi: '3.0.3' });
+      assert.equal(info.isOpenApi, true);
+      assert.equal(info.major, 3);
+      assert.equal(info.minor, 0);
+      assert.equal(info.patch, 3);
+      assert.equal(info.isOpenApi32OrHigher, false);
+    });
+
+    it('detects OpenAPI 3.1.x as non-3.2', () => {
+      const info = detectSpecVersion({ openapi: '3.1.0' });
+      assert.equal(info.isOpenApi, true);
+      assert.equal(info.minor, 1);
+      assert.equal(info.isOpenApi32OrHigher, false);
+    });
+
+    it('detects OpenAPI 3.2.0 as isOpenApi32OrHigher: true', () => {
+      const info = detectSpecVersion({ openapi: '3.2.0' });
+      assert.equal(info.isOpenApi, true);
+      assert.equal(info.major, 3);
+      assert.equal(info.minor, 2);
+      assert.equal(info.isOpenApi32OrHigher, true);
+    });
+
+    it('detects OpenAPI 3.3.1 as isOpenApi32OrHigher: true', () => {
+      const info = detectSpecVersion({ openapi: '3.3.1' });
+      assert.equal(info.isOpenApi, true);
+      assert.equal(info.isOpenApi32OrHigher, true);
+    });
+
+    it('detects Swagger 2.0 as isSwagger: true and non-3.2', () => {
+      const info = detectSpecVersion({ swagger: '2.0' });
+      assert.equal(info.isSwagger, true);
+      assert.equal(info.isOpenApi, false);
+      assert.equal(info.isOpenApi32OrHigher, false);
+    });
+
+    it('handles null or empty objects safely', () => {
+      const info = detectSpecVersion(null);
+      assert.equal(info.isOpenApi32OrHigher, false);
+      assert.equal(info.isOpenApi, false);
+    });
+  });
+
+  describe('OpenAPI 3.2+ Path Item Operations (query & additionalOperations)', () => {
+    it('extracts query operation as QUERY method in OpenAPI 3.2 spec', () => {
+      const spec = {
+        openapi: '3.2.0',
+        info: { title: 'Test 3.2', version: '1.0' },
+        paths: {
+          '/search': {
+            query: {
+              summary: 'Query search',
+              operationId: 'searchQuery',
+              responses: { 200: { description: 'OK' } },
+            },
+          },
+        },
+      };
+
+      const endpoints = extractEndpoints(spec);
+      assert.equal(endpoints.length, 1);
+      assert.equal(endpoints[0].method, 'QUERY');
+      assert.equal(endpoints[0].operationId, 'searchQuery');
+    });
+
+    it('extracts named operations from additionalOperations map in OpenAPI 3.2 spec', () => {
+      const spec = {
+        openapi: '3.2.0',
+        info: { title: 'Test 3.2', version: '1.0' },
+        paths: {
+          '/cache': {
+            additionalOperations: {
+              PURGE: {
+                summary: 'Purge cache',
+                operationId: 'purgeCache',
+                responses: { 200: { description: 'OK' } },
+              },
+              propfind: {
+                summary: 'WebDAV propfind',
+                operationId: 'propfindCache',
+                responses: { 207: { description: 'Multi-Status' } },
+              },
+            },
+          },
+        },
+      };
+
+      const endpoints = extractEndpoints(spec);
+      assert.equal(endpoints.length, 2);
+      assert.ok(endpoints.some((e) => e.method === 'PURGE' && e.operationId === 'purgeCache'));
+      assert.ok(endpoints.some((e) => e.method === 'PROPFIND' && e.operationId === 'propfindCache'));
+    });
+
+    it('does NOT extract query or additionalOperations as operations in OpenAPI 3.0.x spec', () => {
+      const spec = {
+        openapi: '3.0.3',
+        info: { title: 'Test 3.0', version: '1.0' },
+        paths: {
+          '/search': {
+            query: {
+              summary: 'Query search in 3.0 should be ignored',
+              responses: { 200: { description: 'OK' } },
+            },
+            additionalOperations: {
+              PURGE: {
+                summary: 'Purge in 3.0 should be ignored',
+                responses: { 200: { description: 'OK' } },
+              },
+            },
+            get: {
+              summary: 'Standard GET',
+              responses: { 200: { description: 'OK' } },
+            },
+          },
+        },
+      };
+
+      const endpoints = extractEndpoints(spec);
+      assert.equal(endpoints.length, 1);
+      assert.equal(endpoints[0].method, 'GET');
+    });
+
+    it('supports backward-compatible x-oai-additionalOperations in pre-3.2 specs', () => {
+      const spec = {
+        openapi: '3.0.3',
+        info: { title: 'Test 3.0 with extension', version: '1.0' },
+        paths: {
+          '/items': {
+            get: { responses: { 200: { description: 'OK' } } },
+            'x-oai-additionalOperations': {
+              LINK: {
+                summary: 'Link items',
+                responses: { 204: { description: 'Linked' } },
+              },
+            },
+          },
+        },
+      };
+
+      const endpoints = extractEndpoints(spec);
+      assert.equal(endpoints.length, 2);
+      assert.ok(endpoints.some((e) => e.method === 'GET'));
+      assert.ok(endpoints.some((e) => e.method === 'LINK'));
     });
   });
 });

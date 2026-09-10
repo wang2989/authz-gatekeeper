@@ -5,7 +5,42 @@
  * endpoint operations, parameters, request body schemas, and attached security/role annotations.
  */
 
-const VALID_HTTP_METHODS = new Set(['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'trace']);
+export const STANDARD_HTTP_METHODS = new Set(['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'trace']);
+export const VALID_HTTP_METHODS = STANDARD_HTTP_METHODS;
+
+/**
+ * Detects the specification version from an OpenAPI or Swagger document.
+ * 
+ * @param {object} openApiObj - Parsed OpenAPI/Swagger document object
+ * @returns {{ isOpenApi: boolean, isSwagger: boolean, major: number, minor: number, patch: number, raw: string, isOpenApi32OrHigher: boolean }}
+ */
+export function detectSpecVersion(openApiObj) {
+  if (!openApiObj || typeof openApiObj !== 'object') {
+    return { isOpenApi: false, isSwagger: false, major: 0, minor: 0, patch: 0, raw: '', isOpenApi32OrHigher: false };
+  }
+
+  const isOpenApi = typeof openApiObj.openapi === 'string';
+  const isSwagger = !isOpenApi && typeof openApiObj.swagger === 'string';
+  const rawVersion = isOpenApi ? openApiObj.openapi.trim() : (isSwagger ? openApiObj.swagger.trim() : '');
+
+  const parts = rawVersion.split('.').map((p) => parseInt(p, 10) || 0);
+  const major = parts[0] || 0;
+  const minor = parts[1] || 0;
+  const patch = parts[2] || 0;
+
+  // OpenAPI 3.2+ check
+  const isOpenApi32OrHigher = isOpenApi && (major > 3 || (major === 3 && minor >= 2));
+
+  return {
+    isOpenApi,
+    isSwagger,
+    major,
+    minor,
+    patch,
+    raw: rawVersion,
+    isOpenApi32OrHigher,
+  };
+}
 
 /**
  * Normalizes an API route template.
@@ -212,6 +247,64 @@ export function extractRequestBodySchema(operationObj) {
 }
 
 /**
+ * Collects operation entries ([method, operationObj]) from a Path Item object.
+ * Supports standard HTTP verbs across all versions, plus OpenAPI 3.2+ additions
+ * (`query` and `additionalOperations`) as well as the backward-compatible `x-oai-additionalOperations`.
+ * 
+ * @param {object} pathItem - OpenAPI Path Item object
+ * @param {{ isOpenApi32OrHigher: boolean }} [versionInfo={ isOpenApi32OrHigher: false }] - Version metadata
+ * @returns {Array<[string, object]>} Array of [method, operationObject] pairs
+ */
+export function getPathItemOperations(pathItem, versionInfo = { isOpenApi32OrHigher: false }) {
+  if (!pathItem || typeof pathItem !== 'object') return [];
+
+  const operations = [];
+
+  // 1. Standard HTTP methods (get, post, put, delete, patch, options, head, trace)
+  for (const [key, value] of Object.entries(pathItem)) {
+    const lowerKey = key.toLowerCase();
+    if (STANDARD_HTTP_METHODS.has(lowerKey) && value && typeof value === 'object' && !Array.isArray(value)) {
+      operations.push([lowerKey.toUpperCase(), value]);
+    }
+  }
+
+  // 2. OpenAPI 3.2+ native fields: `query` and `additionalOperations`
+  if (versionInfo && versionInfo.isOpenApi32OrHigher) {
+    // Dedicated `query` method slot (HTTP QUERY method)
+    if (pathItem.query && typeof pathItem.query === 'object' && !Array.isArray(pathItem.query)) {
+      operations.push(['QUERY', pathItem.query]);
+    }
+
+    // `additionalOperations`: map of named HTTP operations e.g. { LINK: opObj, PURGE: opObj }
+    if (pathItem.additionalOperations && typeof pathItem.additionalOperations === 'object' && !Array.isArray(pathItem.additionalOperations)) {
+      for (const [customMethod, opObj] of Object.entries(pathItem.additionalOperations)) {
+        if (opObj && typeof opObj === 'object' && !Array.isArray(opObj)) {
+          const upperMethod = customMethod.trim().toUpperCase();
+          if (upperMethod.length > 0 && !operations.some(([m]) => m === upperMethod)) {
+            operations.push([upperMethod, opObj]);
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Backward-compatible vendor extension: `x-oai-additionalOperations`
+  const vendorAdditionalOps = pathItem['x-oai-additionalOperations'];
+  if (vendorAdditionalOps && typeof vendorAdditionalOps === 'object' && !Array.isArray(vendorAdditionalOps)) {
+    for (const [customMethod, opObj] of Object.entries(vendorAdditionalOps)) {
+      if (opObj && typeof opObj === 'object' && !Array.isArray(opObj)) {
+        const upperMethod = customMethod.trim().toUpperCase();
+        if (upperMethod.length > 0 && !operations.some(([m]) => m === upperMethod)) {
+          operations.push([upperMethod, opObj]);
+        }
+      }
+    }
+  }
+
+  return operations;
+}
+
+/**
  * Traverses an OpenAPI specification object and extracts an array of endpoint operation definitions.
  * 
  * @param {object} openApiObj - Parsed and validated OpenAPI 3.0+ or Swagger 2.0 object
@@ -222,6 +315,7 @@ export function extractEndpoints(openApiObj) {
     return [];
   }
 
+  const versionInfo = detectSpecVersion(openApiObj);
   const rootSecurity = Array.isArray(openApiObj.security) ? openApiObj.security : [];
   const endpoints = [];
 
@@ -233,10 +327,9 @@ export function extractEndpoints(openApiObj) {
 
     // Path-level parameters apply across all operations on this path
     const pathLevelParams = Array.isArray(pathItem.parameters) ? pathItem.parameters : [];
+    const operations = getPathItemOperations(pathItem, versionInfo);
 
-    for (const [methodKey, operationObj] of Object.entries(pathItem)) {
-      const method = methodKey.toLowerCase();
-      if (!VALID_HTTP_METHODS.has(method)) continue;
+    for (const [method, operationObj] of operations) {
       if (!operationObj || typeof operationObj !== 'object') continue;
 
       // Merge path-level parameters with operation-level parameters
@@ -259,7 +352,7 @@ export function extractEndpoints(openApiObj) {
       endpoints.push({
         path: normalizedPath,
         rawPath,
-        method: method.toUpperCase(),
+        method,
         operationId: operationObj.operationId || null,
         summary: operationObj.summary || null,
         description: operationObj.description || null,

@@ -1,0 +1,96 @@
+openapi: 3.2.0
+info:
+  title: OpenAPI 3.2 Advanced Search & Operations API
+  version: 1.0.0
+  description: Fixture testing OpenAPI 3.2 query and additionalOperations fields.
+
+servers:
+  - url: http://localhost:8000
+    description: Local test server
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    SearchQuery:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+        filters:
+          type: array
+          items:
+            type: string
+    Document:
+      type: object
+      required:
+        - id
+        - title
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+
+paths:
+  /api/v1/search:
+    query:
+      summary: Execute structured search query
+      operationId: searchQuery
+      x-required-role: Member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchQuery'
+      responses:
+        '200':
+          description: Search results
+
+  /api/v1/documents/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get document by ID
+      operationId: getDocument
+      responses:
+        '200':
+          description: Document returned
+    additionalOperations:
+      LINK:
+        summary: Link related document
+        operationId: linkDocument
+        x-required-role: Editor
+        responses:
+          '204':
+            description: Linked successfully
+      UNLINK:
+        summary: Unlink related document
+        operationId: unlinkDocument
+        x-required-role: Admin
+        responses:
+          '204':
+            description: Unlinked successfully
+
+  /api/v1/cache:
+    additionalOperations:
+      PURGE:
+        summary: Purge cache entry
+        operationId: purgeCache
+        x-required-role: SuperAdmin
+        responses:
+          '200':
+            description: Cache purged
+
