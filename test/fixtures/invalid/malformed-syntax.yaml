@@ -1,0 +1,10 @@
+openapi: "3.0.3"
+info:
+  title: "Broken YAML Spec"
+  version: 1.0.0
+paths:
+  /test:
+	get: # TAB characters in indentation are strictly forbidden in YAML
+      summary: "Invalid indentation"
+  invalid_mapping_key: [unclosed bracket
+

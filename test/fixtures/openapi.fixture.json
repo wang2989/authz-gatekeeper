@@ -1,0 +1,271 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Multi-Tenant Authz Gateway API",
+    "version": "1.0.0",
+    "description": "Production-grade OpenAPI 3.0+ reference specification for testing Gatekeeper ingestion.",
+    "contact": {
+      "name": "SecOps Security Team",
+      "email": "secops@example.com",
+      "url": "https://example.com/security"
+    },
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8000",
+      "description": "Local development and CI test server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health",
+      "description": "System health and liveness probe endpoints"
+    },
+    {
+      "name": "Projects",
+      "description": "Multi-tenant project management endpoints"
+    },
+    {
+      "name": "Admin",
+      "description": "Administrative settings and tenant configuration"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health probe",
+        "description": "Returns 200 when backend is ready to accept requests",
+        "tags": ["Health"],
+        "security": [],
+        "x-allow-anonymous": true,
+        "responses": {
+          "200": {
+            "description": "Service is healthy and ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/{tenant_id}/projects": {
+      "parameters": [
+        {
+          "name": "tenant_id",
+          "in": "path",
+          "required": true,
+          "description": "Unique identifier of the tenant organization",
+          "schema": {
+            "type": "string",
+            "example": "tenant-alpha"
+          }
+        }
+      ],
+      "get": {
+        "summary": "List tenant projects",
+        "description": "Retrieve all projects belonging to the specified tenant organization",
+        "tags": ["Projects"],
+        "x-required-role": ["Viewer", "Member", "OrgAdmin", "SuperAdmin"],
+        "responses": {
+          "200": {
+            "description": "List of projects successfully retrieved"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create tenant project",
+        "description": "Create a new project scoped to the specified tenant",
+        "tags": ["Projects"],
+        "x-required-role": ["OrgAdmin", "SuperAdmin"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Project created successfully"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/{tenant_id}/projects/{project_id}": {
+      "parameters": [
+        {
+          "name": "tenant_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "project_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Get project details",
+        "tags": ["Projects"],
+        "x-required-role": ["Viewer", "Member", "OrgAdmin", "SuperAdmin"],
+        "responses": {
+          "200": {
+            "description": "Project details"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Resource not found or cross-tenant access denied"
+          }
+        }
+      },
+      "put": {
+        "summary": "Update project",
+        "tags": ["Projects"],
+        "x-required-role": ["OrgAdmin", "SuperAdmin"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Project updated"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete project",
+        "tags": ["Projects"],
+        "x-required-role": ["OrgAdmin", "SuperAdmin"],
+        "responses": {
+          "204": {
+            "description": "Project deleted"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/{tenant_id}/admin/settings": {
+      "parameters": [
+        {
+          "name": "tenant_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Get tenant administrative settings",
+        "tags": ["Admin"],
+        "x-required-role": ["SuperAdmin"],
+        "responses": {
+          "200": {
+            "description": "Admin settings retrieved"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Standard Bearer JWT containing roles and tenant_id claims"
+      }
+    },
+    "schemas": {
+      "HealthStatus": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          }
+        }
+      },
+      "ProjectCreate": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Alpha Core Service"
+          },
+          "description": {
+            "type": "string",
+            "example": "Internal project description"
+          }
+        }
+      },
+      "ProjectUpdate": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
+
