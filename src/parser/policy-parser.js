@@ -49,10 +49,19 @@ export function compilePathPattern(pattern) {
     if (seg === '*') {
       return '[^/]+';
     }
-    // Match OpenAPI template parameter e.g. {tenant_id}
-    if (/^\{[^{}]+\}$/.test(seg)) {
-      paramCount++;
-      return '[^/]+';
+    // Match OpenAPI template parameter e.g. {tenant_id} or inline e.g. items-{id}
+    const paramMatches = seg.match(/\{[^{}]+\}/g);
+    if (paramMatches) {
+      paramCount += paramMatches.length;
+      const literalPart = seg.replace(/\{[^{}]+\}/g, '');
+      if (literalPart.length > 0) {
+        literalSegmentCount++;
+        literalCharCount += literalPart.length;
+      }
+      let escaped = seg.replace(/[.*+?^$|[\]\\]/g, '\\$&');
+      escaped = escaped.replace(/\{[^{}]+\}/g, '[^/]+');
+      escaped = escaped.replace(/\\\*/g, '[^/]*');
+      return escaped;
     }
 
     if (seg.length > 0) {

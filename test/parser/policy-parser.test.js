@@ -162,6 +162,29 @@ routes:
       assert.ok(exactLiteralMatch);
       assert.equal(exactLiteralMatch.path, '/api/v1/tenant-root/admin/settings');
       assert.deepEqual(exactLiteralMatch.roles, ['Admin']);
+
+      // 4. Inline parameter template e.g. /items-{id} vs literal /items-me
+      const inlineParamPolicy = parseAuthPolicy(`
+version: "1"
+roles:
+  - Admin
+  - Member
+  - Viewer
+routes:
+  - path: "/items-{id}"
+    roles: [Member]
+  - path: "/items-me"
+    roles: [Viewer]
+`);
+      const inlineMe = inlineParamPolicy.findMatchingRouteRule('/items-me', 'GET');
+      assert.ok(inlineMe);
+      assert.equal(inlineMe.path, '/items-me');
+      assert.deepEqual(inlineMe.roles, ['Viewer']);
+
+      const inline123 = inlineParamPolicy.findMatchingRouteRule('/items-123', 'GET');
+      assert.ok(inline123);
+      assert.equal(inline123.path, '/items-{id}');
+      assert.deepEqual(inline123.roles, ['Member']);
     });
   });
 
