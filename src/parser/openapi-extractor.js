@@ -191,13 +191,13 @@ export function extractSecurity(operationObj, rootSecurity = []) {
 
   let isAnonymous = securityRequirements.length === 0 || allowsAnonymousRequirement;
 
-  // Explicit vendor override
-  if (operationObj && Boolean(operationObj['x-allow-anonymous'])) {
+  // Explicit vendor override: require boolean literal true
+  if (operationObj && operationObj['x-allow-anonymous'] === true) {
     isAnonymous = true;
   }
 
   const isExplicitAnonymous =
-    Boolean(operationObj && operationObj['x-allow-anonymous']) ||
+    Boolean(operationObj && operationObj['x-allow-anonymous'] === true) ||
     (hasExplicitOpSecurity &&
       (operationObj.security.length === 0 ||
         operationObj.security.some(

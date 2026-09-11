@@ -33,9 +33,15 @@ export class PolicySyntaxError extends PolicyValidationError {
  */
 export function compilePathPattern(pattern) {
   const isGlob = pattern.includes('*');
+  const hasMultiSegmentGlob = pattern.includes('**');
+  const hasSingleSegmentGlob = isGlob && !hasMultiSegmentGlob;
 
   // Split into path segments to reliably convert globs and parameter templates
   const segments = pattern.split('/');
+  let paramCount = 0;
+  let literalSegmentCount = 0;
+  let literalCharCount = 0;
+
   const regexSegments = segments.map((seg) => {
     if (seg === '**') {
       return '.*';
@@ -45,7 +51,13 @@ export function compilePathPattern(pattern) {
     }
     // Match OpenAPI template parameter e.g. {tenant_id}
     if (/^\{[^{}]+\}$/.test(seg)) {
+      paramCount++;
       return '[^/]+';
+    }
+
+    if (seg.length > 0) {
+      literalSegmentCount++;
+      literalCharCount += seg.length;
     }
 
     // Escape regex characters
@@ -55,10 +67,37 @@ export function compilePathPattern(pattern) {
     return escaped;
   });
 
+  const hasParams = paramCount > 0;
+  const isLiteral = !isGlob && !hasParams;
+
+  // Precedence tiers:
+  // Tier 1: Literal path (no params, no wildcards e.g. /users/me)
+  // Tier 2: Parameterized path (has params, no wildcards e.g. /users/{id})
+  // Tier 3: Single-segment glob wildcard (*) e.g. /users/*
+  // Tier 4: Multi-segment glob wildcard (**) e.g. /users/**
+  let tier = 1;
+  if (isLiteral) {
+    tier = 1;
+  } else if (!isGlob && hasParams) {
+    tier = 2;
+  } else if (hasSingleSegmentGlob) {
+    tier = 3;
+  } else {
+    tier = 4;
+  }
+
   const regexStr = `^${regexSegments.join('/')}$`;
   return {
     regex: new RegExp(regexStr),
     isGlob,
+    hasParams,
+    paramCount,
+    isLiteral,
+    hasMultiSegmentGlob,
+    hasSingleSegmentGlob,
+    literalSegmentCount,
+    literalCharCount,
+    tier,
   };
 }
 
@@ -257,9 +296,10 @@ export class AuthPolicy {
 
   /**
    * Finds the most specific route rule matching the given path and method.
-   * Exact path rules take precedence over glob wildcard patterns.
+   * Ranks all matches so literal paths win over parameterized routes and
+   * wildcard globs rather than returning the first regex match.
    * 
-   * @param {string} path - Target path e.g. "/api/v1/{tenant_id}/projects"
+   * @param {string} path - Target path e.g. "/users/me" or "/api/v1/{tenant_id}/projects"
    * @param {string} [method] - HTTP method e.g. "GET"
    * @returns {object|null} Matching route rule object or null
    */
@@ -267,7 +307,7 @@ export class AuthPolicy {
     const normalizedTarget = normalizePath(path);
     const upperMethod = method ? method.toUpperCase() : null;
 
-    let matchingGlobRule = null;
+    const matches = [];
 
     for (const rule of this.routes) {
       // Check method restriction if specified in rule
@@ -275,22 +315,53 @@ export class AuthPolicy {
         continue;
       }
 
-      // Check exact path match
-      if (!rule.isGlob) {
-        if (rule.path === normalizedTarget || rule.regex.test(normalizedTarget)) {
-          return rule;
-        }
-      } else {
-        // Glob pattern match
-        if (rule.regex.test(normalizedTarget)) {
-          if (!matchingGlobRule) {
-            matchingGlobRule = rule;
-          }
-        }
+      // Check exact path match or regex match
+      const isExactMatch = rule.path === normalizedTarget;
+      const isRegexMatch = rule.regex.test(normalizedTarget);
+
+      if (isExactMatch || isRegexMatch) {
+        matches.push({
+          rule,
+          isExactMatch,
+        });
       }
     }
 
-    return matchingGlobRule;
+    if (matches.length === 0) {
+      return null;
+    }
+
+    // Rank matching rules:
+    // 1. Tier: Literal (1) > Parameterized (2) > Single-segment glob (3) > Multi-segment glob (4)
+    // 2. Exact string equality (e.g. template identical to spec route)
+    // 3. Higher literal segment count (more specific literal path segments)
+    // 4. Fewer parameter placeholders
+    // 5. Higher literal character count
+    // 6. Tiebreaker: declaration order in routes
+    matches.sort((a, b) => {
+      if (a.rule.tier !== b.rule.tier) {
+        return a.rule.tier - b.rule.tier;
+      }
+
+      if (a.isExactMatch && !b.isExactMatch) return -1;
+      if (!a.isExactMatch && b.isExactMatch) return 1;
+
+      if (a.rule.literalSegmentCount !== b.rule.literalSegmentCount) {
+        return b.rule.literalSegmentCount - a.rule.literalSegmentCount;
+      }
+
+      if (a.rule.paramCount !== b.rule.paramCount) {
+        return a.rule.paramCount - b.rule.paramCount;
+      }
+
+      if (a.rule.literalCharCount !== b.rule.literalCharCount) {
+        return b.rule.literalCharCount - a.rule.literalCharCount;
+      }
+
+      return a.rule.index - b.rule.index;
+    });
+
+    return matches[0].rule;
   }
 }
 
@@ -471,7 +542,7 @@ export function parseAuthPolicy(content) {
       }
 
       const normalizedPath = normalizePath(rule.path);
-      const { regex, isGlob } = compilePathPattern(normalizedPath);
+      const patternMeta = compilePathPattern(normalizedPath);
 
       let methods = null;
       if (rule.methods !== undefined) {
@@ -500,13 +571,13 @@ export function parseAuthPolicy(content) {
       }
 
       normalizedRoutes.push({
+        index: i,
         path: normalizedPath,
         rawPath: rule.path,
         methods,
         roles: routeRoles,
         allow_anonymous: Boolean(rule.allow_anonymous),
-        isGlob,
-        regex,
+        ...patternMeta,
       });
     }
   }

@@ -113,6 +113,56 @@ describe('Declarative Auth Matrix Parser (src/parser/policy-parser.js)', () => {
       const unmatched = policy.findMatchingRouteRule('/unknown/path', 'GET');
       assert.equal(unmatched, null);
     });
+
+    it('ranks literal paths above parameterized paths and wildcard globs regardless of declaration order', () => {
+      // /users/{id} listed BEFORE /users/me must not shadow the truly exact /users/me
+      const policyWithShadowCandidate = parseAuthPolicy(`
+version: "1"
+roles:
+  - Admin
+  - Member
+  - Viewer
+routes:
+  - path: "/users/*"
+    roles: [Admin]
+  - path: "/users/{id}"
+    roles: [Member]
+  - path: "/users/me"
+    roles: [Viewer]
+`);
+
+      // 1. Literal path /users/me must match /users/me (Viewer), not /users/{id} (Member) or /users/* (Admin)
+      const meRule = policyWithShadowCandidate.findMatchingRouteRule('/users/me', 'GET');
+      assert.ok(meRule);
+      assert.equal(meRule.path, '/users/me');
+      assert.deepEqual(meRule.roles, ['Viewer']);
+
+      // 2. Parameterized path /users/123 matches /users/{id} (Member), winning over wildcard /users/* (Admin)
+      const user123Rule = policyWithShadowCandidate.findMatchingRouteRule('/users/123', 'GET');
+      assert.ok(user123Rule);
+      assert.equal(user123Rule.path, '/users/{id}');
+      assert.deepEqual(user123Rule.roles, ['Member']);
+
+      // 3. Exact literal string match wins even when listed after parameterized rule
+      const reverseOrderPolicy = parseAuthPolicy(`
+version: "1"
+roles:
+  - Admin
+  - Member
+routes:
+  - path: "/api/v1/{tenant_id}/admin/settings"
+    roles: [Member]
+  - path: "/api/v1/tenant-root/admin/settings"
+    roles: [Admin]
+`);
+      const exactLiteralMatch = reverseOrderPolicy.findMatchingRouteRule(
+        '/api/v1/tenant-root/admin/settings',
+        'GET'
+      );
+      assert.ok(exactLiteralMatch);
+      assert.equal(exactLiteralMatch.path, '/api/v1/tenant-root/admin/settings');
+      assert.deepEqual(exactLiteralMatch.roles, ['Admin']);
+    });
   });
 
   describe('Minimal Fixture (Format B: Ordered List)', () => {
