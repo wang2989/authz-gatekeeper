@@ -228,11 +228,11 @@ export class AuthPolicy {
       ...tenants,
     };
     this.jwt = {
-      algorithm: jwt.algorithm || 'HS256',
-      role_claim: jwt.role_claim || 'role',
-      tenant_claim: jwt.tenant_claim || 'tenant_id',
-      user_id_claim: jwt.user_id_claim || 'sub',
       ...jwt,
+      algorithm: typeof jwt.algorithm === 'string' && jwt.algorithm.trim().length > 0 ? jwt.algorithm.trim() : 'HS256',
+      role_claim: typeof jwt.role_claim === 'string' && jwt.role_claim.trim().length > 0 ? jwt.role_claim.trim() : 'role',
+      tenant_claim: typeof jwt.tenant_claim === 'string' && jwt.tenant_claim.trim().length > 0 ? jwt.tenant_claim.trim() : 'tenant_id',
+      user_id_claim: typeof jwt.user_id_claim === 'string' && jwt.user_id_claim.trim().length > 0 ? jwt.user_id_claim.trim() : 'sub',
     };
     this.defaults = {
       unauthenticated_access: defaults.unauthenticated_access || 'deny',
@@ -682,13 +682,47 @@ export function parseAuthPolicy(content) {
   }
 
   // 7. Validate Tenants
-  const tenants = doc.tenants && typeof doc.tenants === 'object' ? doc.tenants : {};
+  let tenants = {};
+  if (doc.tenants !== undefined && doc.tenants !== null) {
+    if (typeof doc.tenants !== 'object' || Array.isArray(doc.tenants)) {
+      throw new PolicyValidationError("Property 'tenants' must be an object.");
+    }
+    tenants = doc.tenants;
+  }
 
   // 8. Validate JWT
-  const jwt = doc.jwt && typeof doc.jwt === 'object' ? doc.jwt : {};
+  let jwt = {};
+  if (doc.jwt !== undefined && doc.jwt !== null) {
+    if (typeof doc.jwt !== 'object' || Array.isArray(doc.jwt)) {
+      throw new PolicyValidationError("Property 'jwt' must be an object.");
+    }
+
+    const stringFields = ['algorithm', 'role_claim', 'tenant_claim', 'user_id_claim', 'issuer', 'audience'];
+    for (const field of stringFields) {
+      if (doc.jwt[field] !== undefined && doc.jwt[field] !== null) {
+        if (typeof doc.jwt[field] !== 'string') {
+          throw new PolicyValidationError(
+            `Property 'jwt.${field}' must be a string, received ${typeof doc.jwt[field]}.`
+          );
+        }
+        if (doc.jwt[field].trim().length === 0) {
+          throw new PolicyValidationError(
+            `Property 'jwt.${field}' cannot be an empty or whitespace-only string.`
+          );
+        }
+      }
+    }
+    jwt = { ...doc.jwt };
+  }
 
   // 9. Validate Parameters
-  const parameters = doc.parameters && typeof doc.parameters === 'object' ? doc.parameters : {};
+  let parameters = {};
+  if (doc.parameters !== undefined && doc.parameters !== null) {
+    if (typeof doc.parameters !== 'object' || Array.isArray(doc.parameters)) {
+      throw new PolicyValidationError("Property 'parameters' must be an object.");
+    }
+    parameters = doc.parameters;
+  }
 
   return new AuthPolicy({
     version,

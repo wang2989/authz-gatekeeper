@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { loadOpenApiSpec } from '../../src/parser/openapi-loader.js';
 import { extractEndpoints } from '../../src/parser/openapi-extractor.js';
 import { loadAuthPolicy, parseAuthPolicy } from '../../src/parser/policy-parser.js';
-import { reconcile, ReconciliationError, RULE_SOURCES } from '../../src/parser/reconciler.js';
+import { reconcile, detectTenantBoundary, ReconciliationError, RULE_SOURCES } from '../../src/parser/reconciler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -309,6 +309,28 @@ roles:
       const yamlStr = 'version: "1"\nroles: [Admin]';
       const report = reconcile([], yamlStr);
       assert.equal(report.contracts.length, 0);
+    });
+
+    it('handles custom or missing tenant_claim safely in detectTenantBoundary', () => {
+      const endpoint = {
+        path: '/api/v1/{custom_tenant_id}/data',
+        method: 'GET',
+        pathParameters: ['custom_tenant_id'],
+      };
+
+      // Valid custom tenant_claim
+      const policyCustom = parseAuthPolicy({
+        version: '1',
+        roles: ['Admin'],
+        jwt: { tenant_claim: 'custom_tenant_id' },
+      });
+      const boundaryCustom = detectTenantBoundary(endpoint, policyCustom);
+      assert.equal(boundaryCustom.hasTenantBoundary, true);
+      assert.equal(boundaryCustom.tenantParameter, 'custom_tenant_id');
+
+      // Defensive handling when jwt.tenant_claim is null or missing
+      const boundaryDefensive = detectTenantBoundary(endpoint, { jwt: { tenant_claim: null } });
+      assert.equal(boundaryDefensive.hasTenantBoundary, false);
     });
   });
 });

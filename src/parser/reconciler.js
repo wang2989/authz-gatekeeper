@@ -30,7 +30,10 @@ export class ReconciliationError extends Error {
  * @returns {{ hasTenantBoundary: boolean, tenantParameter: string|null, fixtures: { primary: Record<string, string>, secondary: Record<string, string> } }}
  */
 export function detectTenantBoundary(endpoint, authPolicy) {
-  const tenantClaim = authPolicy.jwt?.tenant_claim || 'tenant_id';
+  const rawTenantClaim = authPolicy.jwt?.tenant_claim;
+  const tenantClaim = typeof rawTenantClaim === 'string' && rawTenantClaim.trim().length > 0
+    ? rawTenantClaim.trim()
+    : 'tenant_id';
   const paramCandidates = new Set([
     'tenant_id',
     'tenantid',

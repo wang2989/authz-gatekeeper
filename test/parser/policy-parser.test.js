@@ -516,6 +516,126 @@ roles:
         }
       );
     });
+
+    it('throws when jwt configuration is invalid', () => {
+      // jwt is not an object (e.g. number, array)
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            jwt: 123,
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'jwt' must be an object/);
+          return true;
+        }
+      );
+
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            jwt: ['not-an-object'],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'jwt' must be an object/);
+          return true;
+        }
+      );
+
+      // jwt.tenant_claim is a number instead of string
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            jwt: { tenant_claim: 123 },
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'jwt\.tenant_claim' must be a string, received number/);
+          return true;
+        }
+      );
+
+      // jwt.tenant_claim is empty/whitespace
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            jwt: { tenant_claim: '   ' },
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'jwt\.tenant_claim' cannot be an empty or whitespace-only string/);
+          return true;
+        }
+      );
+
+      // jwt.role_claim is not a string
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            jwt: { role_claim: true },
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'jwt\.role_claim' must be a string, received boolean/);
+          return true;
+        }
+      );
+
+      // jwt.algorithm is not a string
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            jwt: { algorithm: 256 },
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'jwt\.algorithm' must be a string, received number/);
+          return true;
+        }
+      );
+    });
+
+    it('throws when tenants or parameters property is not an object', () => {
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            tenants: 'flat',
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'tenants' must be an object/);
+          return true;
+        }
+      );
+
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            parameters: ['tenant_id'],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'parameters' must be an object/);
+          return true;
+        }
+      );
+    });
   });
 });
-
