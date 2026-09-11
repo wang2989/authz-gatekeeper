@@ -196,6 +196,14 @@ export function extractSecurity(operationObj, rootSecurity = []) {
     isAnonymous = true;
   }
 
+  const isExplicitAnonymous =
+    Boolean(operationObj && operationObj['x-allow-anonymous']) ||
+    (hasExplicitOpSecurity &&
+      (operationObj.security.length === 0 ||
+        operationObj.security.some(
+          (req) => req && typeof req === 'object' && !Array.isArray(req) && Object.keys(req).length === 0
+        )));
+
   // Extract OAuth2 / OIDC scopes per requirement alternative (preserving OR semantics)
   const scopesPerRequirement = securityRequirements.map((secRequirement) => {
     if (!secRequirement || typeof secRequirement !== 'object' || Array.isArray(secRequirement)) {
@@ -216,6 +224,8 @@ export function extractSecurity(operationObj, rootSecurity = []) {
 
   return {
     isAnonymous,
+    isExplicitAnonymous,
+    hasExplicitSecurity: hasExplicitOpSecurity,
     securityRequirements,
     scopesPerRequirement,
   };
@@ -365,7 +375,13 @@ export function extractEndpoints(openApiObj) {
       const allPathParams = Array.from(new Set([...templatePathVars, ...declaredPathParams]));
 
       // Security & Anonymous Access
-      const { isAnonymous, securityRequirements, scopesPerRequirement } = extractSecurity(operationObj, rootSecurity);
+      const {
+        isAnonymous,
+        isExplicitAnonymous,
+        hasExplicitSecurity,
+        securityRequirements,
+        scopesPerRequirement,
+      } = extractSecurity(operationObj, rootSecurity);
 
       // Roles from vendor extensions
       const requiredRoles = extractRoles(operationObj);
@@ -391,6 +407,8 @@ export function extractEndpoints(openApiObj) {
           return this.scopesPerRequirement;
         },
         isAnonymous,
+        isExplicitAnonymous,
+        hasExplicitSecurity,
         hasRequestBody: Boolean(operationObj.requestBody),
         requestBodySchema,
       });

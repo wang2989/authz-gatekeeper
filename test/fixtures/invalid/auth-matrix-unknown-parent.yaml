@@ -1,0 +1,7 @@
+# Invalid policy: Inheriting from undefined role
+version: "1"
+
+roles:
+  Admin:
+    inherits: [NonExistentRole]
+

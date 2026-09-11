@@ -1,0 +1,35 @@
+# Hierarchical multi-tenant policy fixture for Authz Gatekeeper
+version: "1"
+
+roles:
+  Admin:
+    inherits: [Editor]
+    description: "Organization administrator"
+  Editor:
+    inherits: [Viewer]
+    description: "Content editor"
+  Viewer:
+    inherits: []
+    description: "Read-only viewer"
+
+tenants:
+  model: hierarchical
+  fixtures:
+    primary:
+      id: "org-parent"
+      name: "Parent Organization"
+    secondary:
+      id: "org-child"
+      parent_id: "org-parent"
+      name: "Child Sub-Organization"
+
+defaults:
+  unauthenticated_access: deny
+  default_role: Viewer
+
+routes:
+  - path: "/api/v1/{org_id}/public"
+    allow_anonymous: true
+  - path: "/api/v1/{org_id}/manage/*"
+    roles: [Admin]
+

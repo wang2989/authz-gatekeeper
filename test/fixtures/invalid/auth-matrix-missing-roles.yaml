@@ -1,0 +1,6 @@
+# Invalid policy: Missing required 'roles' field
+version: "1"
+
+defaults:
+  default_role: Admin
+

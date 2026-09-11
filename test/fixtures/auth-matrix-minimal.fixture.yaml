@@ -1,0 +1,10 @@
+# Minimal authorization policy fixture for Authz Gatekeeper
+# Demonstrates Format B: ordered hierarchy list (SuperAdmin > OrgAdmin > Member > Viewer)
+version: "1"
+
+roles:
+  - SuperAdmin
+  - OrgAdmin
+  - Member
+  - Viewer
+

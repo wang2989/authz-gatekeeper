@@ -5,6 +5,24 @@ import { parseCliArgs, getHelpText } from './cli/args.js';
 import { checkTargetReadiness } from './core/probe.js';
 import { loadOpenApiSpec } from './parser/openapi-loader.js';
 import { extractEndpoints } from './parser/openapi-extractor.js';
+import { loadAuthPolicy, parseAuthPolicy, AuthPolicy, PolicyValidationError, PolicySyntaxError } from './parser/policy-parser.js';
+import { reconcile, ReconciliationError, RULE_SOURCES } from './parser/reconciler.js';
+
+export {
+  parseCliArgs,
+  getHelpText,
+  checkTargetReadiness,
+  loadOpenApiSpec,
+  extractEndpoints,
+  loadAuthPolicy,
+  parseAuthPolicy,
+  AuthPolicy,
+  PolicyValidationError,
+  PolicySyntaxError,
+  reconcile,
+  ReconciliationError,
+  RULE_SOURCES,
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -78,7 +96,30 @@ export async function runCli(rawArgs = process.argv.slice(2), env = process.env)
     const pathCount = Object.keys(openApiSpec.paths || {}).length;
     process.stdout.write(`✅ Ingested "${openApiSpec.info.title}" (v${openApiSpec.info.version}): ${pathCount} paths (${endpoints.length} operations defined).\n\n`);
 
-    process.stdout.write(`✨ Workspace ingestion and route extraction complete.\n`);
+    // Policy Loading & Reconciliation (if policy specified)
+    let reconciliation = null;
+    if (config.policy) {
+      process.stdout.write(`📋 Ingesting authorization policy from ${config.policy}...\n`);
+      const authPolicy = await loadAuthPolicy(config.policy);
+      process.stdout.write(`✅ Policy loaded: ${authPolicy.roles.length} roles defined (${authPolicy.roles.join(', ')}).\n\n`);
+
+      process.stdout.write(`⚖️  Reconciling specification endpoints with authorization policy...\n`);
+      reconciliation = reconcile(endpoints, authPolicy, {
+        allowValidationErrors: config.allowValidationErrors,
+      });
+      process.stdout.write(
+        `✅ Reconciled ${reconciliation.contracts.length} endpoints (${reconciliation.summary.protectedEndpoints} protected, ${reconciliation.summary.anonymousEndpoints} anonymous, ${reconciliation.summary.tenantBoundaryEndpoints} tenant-isolated).\n\n`
+      );
+
+      if (reconciliation.warnings.length > 0) {
+        for (const w of reconciliation.warnings) {
+          process.stdout.write(`⚠️  Warning: ${w}\n`);
+        }
+        process.stdout.write('\n');
+      }
+    }
+
+    process.stdout.write(`✨ Workspace ingestion and policy reconciliation complete.\n`);
     return 0;
   } catch (err) {
     process.stderr.write(`\n❌ Gatekeeper Execution Failure:\n${err.message}\n\n`);
