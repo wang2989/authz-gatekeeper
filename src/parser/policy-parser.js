@@ -545,20 +545,57 @@ export function parseAuthPolicy(content) {
       const patternMeta = compilePathPattern(normalizedPath);
 
       let methods = null;
-      if (rule.methods !== undefined) {
+      if (rule.methods !== undefined && rule.methods !== null) {
         if (Array.isArray(rule.methods)) {
-          methods = rule.methods.map((m) => String(m).trim().toUpperCase()).filter(Boolean);
+          if (rule.methods.length === 0) {
+            throw new PolicyValidationError(
+              `Property 'methods' in route rule "${rule.path}" cannot be an empty array.`
+            );
+          }
+          methods = rule.methods.map((m, idx) => {
+            if (typeof m !== 'string' || m.trim().length === 0) {
+              throw new PolicyValidationError(
+                `Invalid HTTP method at index ${idx} in route rule "${rule.path}": expected non-empty string.`
+              );
+            }
+            return m.trim().toUpperCase();
+          });
         } else if (typeof rule.methods === 'string') {
+          if (rule.methods.trim().length === 0) {
+            throw new PolicyValidationError(
+              `Property 'methods' in route rule "${rule.path}" cannot be an empty string.`
+            );
+          }
           methods = [rule.methods.trim().toUpperCase()];
+        } else {
+          throw new PolicyValidationError(
+            `Property 'methods' in route rule "${rule.path}" must be a string or an array of strings, received ${typeof rule.methods}.`
+          );
         }
       }
 
       let routeRoles = [];
-      if (rule.roles !== undefined) {
+      if (rule.roles !== undefined && rule.roles !== null) {
         if (Array.isArray(rule.roles)) {
-          routeRoles = rule.roles.map((r) => String(r).trim()).filter(Boolean);
+          routeRoles = rule.roles.map((r, idx) => {
+            if (typeof r !== 'string' || r.trim().length === 0) {
+              throw new PolicyValidationError(
+                `Invalid role at index ${idx} in route rule "${rule.path}": expected non-empty string.`
+              );
+            }
+            return r.trim();
+          });
         } else if (typeof rule.roles === 'string') {
+          if (rule.roles.trim().length === 0) {
+            throw new PolicyValidationError(
+              `Property 'roles' in route rule "${rule.path}" cannot be an empty string.`
+            );
+          }
           routeRoles = [rule.roles.trim()];
+        } else {
+          throw new PolicyValidationError(
+            `Property 'roles' in route rule "${rule.path}" must be a string or an array of strings, received ${typeof rule.roles}.`
+          );
         }
 
         for (const r of routeRoles) {
@@ -570,13 +607,21 @@ export function parseAuthPolicy(content) {
         }
       }
 
+      if (rule.allow_anonymous !== undefined && rule.allow_anonymous !== null) {
+        if (typeof rule.allow_anonymous !== 'boolean') {
+          throw new PolicyValidationError(
+            `Property 'allow_anonymous' in route rule "${rule.path}" must be a boolean, received ${typeof rule.allow_anonymous}.`
+          );
+        }
+      }
+
       normalizedRoutes.push({
         index: i,
         path: normalizedPath,
         rawPath: rule.path,
         methods,
         roles: routeRoles,
-        allow_anonymous: Boolean(rule.allow_anonymous),
+        allow_anonymous: rule.allow_anonymous === true,
         ...patternMeta,
       });
     }

@@ -181,7 +181,7 @@ export function reconcile(endpoints, authPolicyOrRaw, options = {}) {
 
     // Option: preferPolicyOverSpec allows matrix rules to override OpenAPI spec annotations
     if (preferPolicyOverSpec && matchingMatrixRule) {
-      if (matchingMatrixRule.allow_anonymous) {
+      if (matchingMatrixRule.allow_anonymous === true) {
         isAnonymous = true;
         requiredRoles = [];
       } else {
@@ -218,7 +218,7 @@ export function reconcile(endpoints, authPolicyOrRaw, options = {}) {
 
     // Layer 2 & 3: Match from auth-matrix.yaml routes
     if (!ruleSource && matchingMatrixRule) {
-      if (matchingMatrixRule.allow_anonymous) {
+      if (matchingMatrixRule.allow_anonymous === true) {
         isAnonymous = true;
         requiredRoles = [];
       } else {

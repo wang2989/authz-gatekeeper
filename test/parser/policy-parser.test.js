@@ -369,6 +369,85 @@ roles:
         }
       );
     });
+
+    it('throws when route methods is invalid (e.g. methods: 42 or empty)', () => {
+      // methods: 42 (non-string, non-array)
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            routes: [{ path: '/api/test', methods: 42 }],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'methods' in route rule "\/api\/test" must be a string or an array of strings/);
+          return true;
+        }
+      );
+
+      // methods: [] (empty array)
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            routes: [{ path: '/api/test', methods: [] }],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'methods' in route rule "\/api\/test" cannot be an empty array/);
+          return true;
+        }
+      );
+
+      // methods: [42] (invalid element)
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            routes: [{ path: '/api/test', methods: [42] }],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Invalid HTTP method at index 0/);
+          return true;
+        }
+      );
+    });
+
+    it('throws when route roles or allow_anonymous has invalid type', () => {
+      // roles: 42 (non-string, non-array)
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            routes: [{ path: '/api/test', roles: 42 }],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'roles' in route rule "\/api\/test" must be a string or an array of strings/);
+          return true;
+        }
+      );
+
+      // allow_anonymous: "false" (string instead of boolean)
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            routes: [{ path: '/api/test', allow_anonymous: 'false' }],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Property 'allow_anonymous' in route rule "\/api\/test" must be a boolean/);
+          return true;
+        }
+      );
+    });
   });
 });
 
