@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { loadOpenApiSpec } from '../../src/parser/openapi-loader.js';
 import { extractEndpoints } from '../../src/parser/openapi-extractor.js';
 import { loadAuthPolicy, parseAuthPolicy } from '../../src/parser/policy-parser.js';
-import { reconcile, detectTenantBoundary, ReconciliationError, RULE_SOURCES } from '../../src/parser/reconciler.js';
+import { reconcile, detectTenantBoundary, resolveEffectiveRoleSets, ReconciliationError, RULE_SOURCES } from '../../src/parser/reconciler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -234,8 +234,41 @@ defaults:
       assert.equal(report.contracts[0].ruleSource, RULE_SOURCES.UNMAPPED_DENY);
       assert.equal(report.contracts[0].isAnonymous, false);
       assert.deepEqual(report.contracts[0].requiredRoles, []);
+      assert.deepEqual(report.contracts[0].authorizedRoles, []);
+      assert.deepEqual(report.contracts[0].unauthorizedRoles, ['Admin']);
       assert.ok(report.warnings.length > 0);
       assert.match(report.warnings[0], /zero-trust deny/);
+
+      // Multi-role policy under zero-trust deny: every declared role must be unauthorized
+      const multiRolePolicy = parseAuthPolicy(`
+version: "1"
+roles:
+  - SuperAdmin
+  - OrgAdmin
+  - Member
+  - Viewer
+defaults:
+  unauthenticated_access: deny
+`);
+      const multiReport = reconcile(endpoints, multiRolePolicy);
+      assert.equal(multiReport.contracts[0].ruleSource, RULE_SOURCES.UNMAPPED_DENY);
+      assert.equal(multiReport.contracts[0].isAnonymous, false);
+      assert.deepEqual(multiReport.contracts[0].requiredRoles, []);
+      assert.deepEqual(multiReport.contracts[0].authorizedRoles, []);
+      assert.deepEqual(
+        multiReport.contracts[0].unauthorizedRoles,
+        ['SuperAdmin', 'OrgAdmin', 'Member', 'Viewer']
+      );
+
+      // resolveEffectiveRoleSets returns all declared roles as unauthorized when protected with empty required roles
+      const effectiveSets = resolveEffectiveRoleSets([], multiRolePolicy, true);
+      assert.deepEqual(effectiveSets.authorizedRoles, []);
+      assert.deepEqual(effectiveSets.unauthorizedRoles, ['SuperAdmin', 'OrgAdmin', 'Member', 'Viewer']);
+
+      // resolveEffectiveRoleSets returns empty unauthorized roles when not protected (anonymous)
+      const anonSets = resolveEffectiveRoleSets([], multiRolePolicy, false);
+      assert.deepEqual(anonSets.authorizedRoles, []);
+      assert.deepEqual(anonSets.unauthorizedRoles, []);
     });
 
     it('preferPolicyOverSpec option allows matrix routes to override OpenAPI annotations', () => {

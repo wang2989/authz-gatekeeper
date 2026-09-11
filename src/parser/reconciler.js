@@ -101,13 +101,16 @@ export function detectTenantBoundary(endpoint, authPolicy) {
  * 
  * @param {string[]} requiredRoles - Directly required roles for the endpoint
  * @param {AuthPolicy} authPolicy - Parsed authorization policy
+ * @param {boolean} [isProtected=false] - Whether the endpoint is protected
  * @returns {{ authorizedRoles: string[], unauthorizedRoles: string[] }}
  */
-export function resolveEffectiveRoleSets(requiredRoles, authPolicy) {
+export function resolveEffectiveRoleSets(requiredRoles, authPolicy, isProtected = false) {
+  const allRoles = authPolicy?.roles || [];
+
   if (!Array.isArray(requiredRoles) || requiredRoles.length === 0) {
     return {
       authorizedRoles: [],
-      unauthorizedRoles: [],
+      unauthorizedRoles: isProtected ? [...allRoles] : [],
     };
   }
 
@@ -119,7 +122,6 @@ export function resolveEffectiveRoleSets(requiredRoles, authPolicy) {
     }
   }
 
-  const allRoles = authPolicy.roles || [];
   const unauthorizedRoles = allRoles.filter((r) => !authorizedSet.has(r));
 
   return {
@@ -266,7 +268,16 @@ export function reconcile(endpoints, authPolicyOrRaw, options = {}) {
     byRuleSource[ruleSource] = (byRuleSource[ruleSource] || 0) + 1;
 
     // Resolve effective authorized & unauthorized personas
-    const { authorizedRoles, unauthorizedRoles } = resolveEffectiveRoleSets(requiredRoles, authPolicy);
+    let { authorizedRoles, unauthorizedRoles } = resolveEffectiveRoleSets(
+      requiredRoles,
+      authPolicy,
+      !isAnonymous
+    );
+
+    if (ruleSource === RULE_SOURCES.UNMAPPED_DENY) {
+      authorizedRoles = [];
+      unauthorizedRoles = [...(authPolicy.roles || [])];
+    }
 
     // Multi-tenant boundary and fixtures
     const { hasTenantBoundary, tenantParameter, fixtures } = detectTenantBoundary(endpoint, authPolicy);
