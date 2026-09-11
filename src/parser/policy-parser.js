@@ -448,29 +448,63 @@ export function parseAuthPolicy(content) {
       throw new PolicyValidationError("Property 'roles' map cannot be empty.");
     }
 
-    roles = roleKeys.map((r) => r.trim());
+    const seenRoles = new Set();
+    roles = [];
 
     for (const [roleName, roleDef] of Object.entries(doc.roles)) {
+      if (typeof roleName !== 'string' || roleName.trim().length === 0) {
+        throw new PolicyValidationError(
+          "Invalid role in 'roles' map: role name must be a non-empty string."
+        );
+      }
       const role = roleName.trim();
+      if (seenRoles.has(role)) {
+        throw new PolicyValidationError(`Duplicate role "${role}" found in 'roles' map.`);
+      }
+      seenRoles.add(role);
+      roles.push(role);
+
       let parents = [];
 
-      if (roleDef && typeof roleDef === 'object') {
+      if (roleDef && typeof roleDef === 'object' && !Array.isArray(roleDef)) {
         if (roleDef.description && typeof roleDef.description === 'string') {
           roleDescriptions[role] = roleDef.description.trim();
         }
 
         if (roleDef.inherits !== undefined && roleDef.inherits !== null) {
           if (Array.isArray(roleDef.inherits)) {
-            parents = roleDef.inherits.map((p) => String(p).trim()).filter(Boolean);
+            const seenParents = new Set();
+            parents = [];
+            for (let pIdx = 0; pIdx < roleDef.inherits.length; pIdx++) {
+              const p = roleDef.inherits[pIdx];
+              if (typeof p !== 'string' || p.trim().length === 0) {
+                throw new PolicyValidationError(
+                  `Invalid parent role at index ${pIdx} for role "${role}": expected non-empty string.`
+                );
+              }
+              const parentRole = p.trim();
+              if (seenParents.has(parentRole)) {
+                throw new PolicyValidationError(
+                  `Duplicate parent role "${parentRole}" found in 'inherits' for role "${role}".`
+                );
+              }
+              seenParents.add(parentRole);
+              parents.push(parentRole);
+            }
           } else if (typeof roleDef.inherits === 'string') {
             const trimmed = roleDef.inherits.trim();
-            if (trimmed.length > 0) {
-              parents = [trimmed];
+            if (trimmed.length === 0) {
+              throw new PolicyValidationError(
+                `Property 'inherits' for role "${role}" cannot be an empty string.`
+              );
             }
+            parents = [trimmed];
           } else {
             throw new PolicyValidationError(`Role "${role}" property 'inherits' must be an array or string.`);
           }
         }
+      } else if (roleDef !== null && roleDef !== undefined) {
+        throw new PolicyValidationError(`Role definition for "${role}" must be an object or null.`);
       }
 
       adjacencyList.set(role, parents);
@@ -500,7 +534,13 @@ export function parseAuthPolicy(content) {
   }
 
   if (defaults.default_role !== undefined && defaults.default_role !== null) {
-    if (typeof defaults.default_role !== 'string' || !roles.includes(defaults.default_role.trim())) {
+    if (typeof defaults.default_role !== 'string' || defaults.default_role.trim().length === 0) {
+      throw new PolicyValidationError(
+        "Property 'defaults.default_role' must be a non-empty string."
+      );
+    }
+    const defaultRole = defaults.default_role.trim();
+    if (!roles.includes(defaultRole)) {
       throw new PolicyValidationError(
         `Default role "${defaults.default_role}" is not declared in 'roles'.`
       );
@@ -512,12 +552,26 @@ export function parseAuthPolicy(content) {
     if (typeof defaults.method_defaults !== 'object' || Array.isArray(defaults.method_defaults)) {
       throw new PolicyValidationError("Property 'defaults.method_defaults' must be an object.");
     }
-    for (const [method, role] of Object.entries(defaults.method_defaults)) {
-      const upperMethod = method.toUpperCase();
-      const roleStr = typeof role === 'string' ? role.trim() : '';
+    const seenMethods = new Set();
+    for (const [methodKey, roleVal] of Object.entries(defaults.method_defaults)) {
+      if (typeof methodKey !== 'string' || methodKey.trim().length === 0) {
+        throw new PolicyValidationError("Method default HTTP method cannot be empty or whitespace-only.");
+      }
+      const upperMethod = methodKey.trim().toUpperCase();
+      if (seenMethods.has(upperMethod)) {
+        throw new PolicyValidationError(`Duplicate method default for "${upperMethod}".`);
+      }
+      seenMethods.add(upperMethod);
+
+      if (typeof roleVal !== 'string' || roleVal.trim().length === 0) {
+        throw new PolicyValidationError(
+          `Method default for ${upperMethod} must specify a non-empty string role.`
+        );
+      }
+      const roleStr = roleVal.trim();
       if (!roles.includes(roleStr)) {
         throw new PolicyValidationError(
-          `Method default for ${upperMethod} references undeclared role "${role}".`
+          `Method default for ${upperMethod} references undeclared role "${roleVal}".`
         );
       }
       methodDefaults[upperMethod] = roleStr;

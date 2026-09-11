@@ -293,6 +293,74 @@ roles:
       );
     });
 
+    it('throws when duplicate or whitespace-only role keys appear in Format A map', () => {
+      // Quoted keys normalizing to same name e.g. "Admin" and " Admin "
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: {
+              Admin: { inherits: [] },
+              ' Admin ': { inherits: [] },
+            },
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Duplicate role "Admin" found in 'roles' map/);
+          return true;
+        }
+      );
+
+      // Whitespace-only role name
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: {
+              '   ': { inherits: [] },
+            },
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /role name must be a non-empty string/);
+          return true;
+        }
+      );
+
+      // Empty string in inherits
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: {
+              Admin: { inherits: ['   '] },
+            },
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Invalid parent role at index 0 for role "Admin"/);
+          return true;
+        }
+      );
+
+      // Duplicate parent roles in inherits
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: {
+              Member: { inherits: [] },
+              Admin: { inherits: ['Member', ' Member '] },
+            },
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Duplicate parent role "Member" found in 'inherits' for role "Admin"/);
+          return true;
+        }
+      );
+    });
+
     it('throws when circular role inheritance is detected', async () => {
       const fixturePath = join(FIXTURES_DIR, 'invalid', 'auth-matrix-cyclic.yaml');
       await assert.rejects(
