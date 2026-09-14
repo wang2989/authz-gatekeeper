@@ -708,6 +708,14 @@ export function parseAuthPolicy(content) {
     if (typeof doc.tenants !== 'object' || Array.isArray(doc.tenants)) {
       throw new PolicyValidationError("Property 'tenants' must be an object.");
     }
+    if (
+      doc.tenants.model !== undefined &&
+      !['flat', 'hierarchical'].includes(doc.tenants.model)
+    ) {
+      throw new PolicyValidationError(
+        `Property 'tenants.model' must be "flat" or "hierarchical".`
+      );
+    }
     tenants = doc.tenants;
   }
 
