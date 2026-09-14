@@ -1,0 +1,5 @@
+# Invalid policy: Missing required 'version' field
+roles:
+  - Admin
+  - User
+

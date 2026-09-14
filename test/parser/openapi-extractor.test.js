@@ -101,11 +101,38 @@ describe('OpenAPI Route & Security Annotation Extractor (src/parser/openapi-extr
     });
 
     it('identifies operation with x-allow-anonymous: true as anonymous', () => {
-      const { isAnonymous } = extractSecurity(
+      const { isAnonymous, isExplicitAnonymous } = extractSecurity(
         { 'x-allow-anonymous': true, security: [{ bearerAuth: [] }] },
         [{ bearerAuth: [] }]
       );
       assert.equal(isAnonymous, true);
+      assert.equal(isExplicitAnonymous, true);
+    });
+
+    it('rejects truthy strings and requires boolean literal true for x-allow-anonymous', () => {
+      // String "false" from YAML should NOT grant anonymous access
+      const resFalseStr = extractSecurity(
+        { 'x-allow-anonymous': 'false', security: [{ bearerAuth: [] }] },
+        [{ bearerAuth: [] }]
+      );
+      assert.equal(resFalseStr.isAnonymous, false);
+      assert.equal(resFalseStr.isExplicitAnonymous, false);
+
+      // String "true" should NOT be accepted as boolean true
+      const resTrueStr = extractSecurity(
+        { 'x-allow-anonymous': 'true', security: [{ bearerAuth: [] }] },
+        [{ bearerAuth: [] }]
+      );
+      assert.equal(resTrueStr.isAnonymous, false);
+      assert.equal(resTrueStr.isExplicitAnonymous, false);
+
+      // Boolean literal false
+      const resFalseBool = extractSecurity(
+        { 'x-allow-anonymous': false, security: [{ bearerAuth: [] }] },
+        [{ bearerAuth: [] }]
+      );
+      assert.equal(resFalseBool.isAnonymous, false);
+      assert.equal(resFalseBool.isExplicitAnonymous, false);
     });
 
     it('inherits root security requirements when operation security is omitted', () => {

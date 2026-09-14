@@ -1,0 +1,84 @@
+# Production-grade authorization policy fixture for Authz Gatekeeper
+version: "1"
+
+# Role hierarchy definition (Format A: Directed inheritance map)
+# SuperAdmin inherits OrgAdmin, which inherits Member, which inherits Viewer
+roles:
+  SuperAdmin:
+    inherits: [OrgAdmin]
+    description: "System-wide super administrator with unrestricted access"
+  OrgAdmin:
+    inherits: [Member]
+    description: "Tenant organization administrator"
+  Member:
+    inherits: [Viewer]
+    description: "Standard tenant member with create/read permissions"
+  Viewer:
+    inherits: []
+    description: "Read-only tenant observer"
+
+# Multi-tenant boundary definition for BOLA/IDOR isolation testing
+tenants:
+  model: flat # Sibling tenant isolation
+  fixtures:
+    primary:
+      id: "tenant-alpha"
+      name: "Acme Corp (Primary Tenant)"
+    secondary:
+      id: "tenant-beta"
+      name: "Cyberdyne Systems (Attacker Tenant)"
+
+# Mock JWT token synthesis settings
+jwt:
+  algorithm: HS256
+  role_claim: "role"
+  tenant_claim: "tenant_id"
+  user_id_claim: "sub"
+  issuer: "gatekeeper"
+  audience: "gatekeeper-api"
+
+# Fallback defaults when routes lack explicit OpenAPI annotations
+defaults:
+  unauthenticated_access: deny # Expect 401/403 for unprotected endpoints
+  default_role: OrgAdmin       # Fallback role for routes not explicitly mapped
+  method_defaults:
+    GET: Viewer
+    POST: Member
+    PUT: Member
+    PATCH: Member
+    DELETE: OrgAdmin
+
+# Path-level rules (exact match and glob patterns)
+routes:
+  # Public health check
+  - path: "/health"
+    allow_anonymous: true
+
+  # Administrative routes require SuperAdmin
+  - path: "/api/v1/{tenant_id}/admin/*"
+    roles: [SuperAdmin]
+
+  # Project listing allows any Viewer+
+  - path: "/api/v1/{tenant_id}/projects"
+    methods: [GET]
+    roles: [Viewer]
+
+  # Project creation requires OrgAdmin+
+  - path: "/api/v1/{tenant_id}/projects"
+    methods: [POST]
+    roles: [OrgAdmin]
+
+  # Destructive project actions require OrgAdmin+
+  - path: "/api/v1/{tenant_id}/projects/*"
+    methods: [DELETE]
+    roles: [OrgAdmin]
+
+# Seeded mock values for dynamic path parameters
+parameters:
+  tenant_id:
+    primary: "tenant-alpha"
+    secondary: "tenant-beta"
+  project_id:
+    primary: "proj-100"
+    secondary: "proj-200"
+

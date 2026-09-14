@@ -1,0 +1,11 @@
+# Invalid policy: Cyclic role inheritance
+version: "1"
+
+roles:
+  RoleA:
+    inherits: [RoleB]
+  RoleB:
+    inherits: [RoleC]
+  RoleC:
+    inherits: [RoleA]
+

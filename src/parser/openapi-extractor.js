@@ -164,7 +164,7 @@ export function extractRoles(operationObj) {
  * 
  * @param {object} operationObj - OpenAPI Operation Object
  * @param {Array<object>} [rootSecurity=[]] - Global security requirements from spec root
- * @returns {{ isAnonymous: boolean, securityRequirements: Array<object>, scopesPerRequirement: Array<string[]> }}
+ * @returns {{ isAnonymous: boolean, isExplicitAnonymous: boolean, hasExplicitSecurity: boolean, securityRequirements: Array<object>, scopesPerRequirement: Array<string[]> }}
  */
 export function extractSecurity(operationObj, rootSecurity = []) {
   const globalSec = Array.isArray(rootSecurity) ? rootSecurity : [];
@@ -191,10 +191,18 @@ export function extractSecurity(operationObj, rootSecurity = []) {
 
   let isAnonymous = securityRequirements.length === 0 || allowsAnonymousRequirement;
 
-  // Explicit vendor override
-  if (operationObj && Boolean(operationObj['x-allow-anonymous'])) {
+  // Explicit vendor override: require boolean literal true
+  if (operationObj && operationObj['x-allow-anonymous'] === true) {
     isAnonymous = true;
   }
+
+  const isExplicitAnonymous =
+    Boolean(operationObj && operationObj['x-allow-anonymous'] === true) ||
+    (hasExplicitOpSecurity &&
+      (operationObj.security.length === 0 ||
+        operationObj.security.some(
+          (req) => req && typeof req === 'object' && !Array.isArray(req) && Object.keys(req).length === 0
+        )));
 
   // Extract OAuth2 / OIDC scopes per requirement alternative (preserving OR semantics)
   const scopesPerRequirement = securityRequirements.map((secRequirement) => {
@@ -216,6 +224,8 @@ export function extractSecurity(operationObj, rootSecurity = []) {
 
   return {
     isAnonymous,
+    isExplicitAnonymous,
+    hasExplicitSecurity: hasExplicitOpSecurity,
     securityRequirements,
     scopesPerRequirement,
   };
@@ -324,6 +334,8 @@ export function getPathItemOperations(pathItem, versionInfo = { isOpenApi32OrHig
  * @property {Array<string[]>} scopesPerRequirement - Non-flat scope groups required per alternative in securityRequirements (source of truth)
  * @property {Array<string[]>} [requiredScopes] - @deprecated Non-flat alternative scope groups. Downstream code should consume scopesPerRequirement / securityRequirements.
  * @property {boolean} isAnonymous - Whether the operation allows unauthenticated access
+ * @property {boolean} isExplicitAnonymous - Whether the operation explicitly declares anonymous access
+ * @property {boolean} hasExplicitSecurity - Whether the operation explicitly defines its own security array
  * @property {boolean} hasRequestBody - Whether requestBody is defined
  * @property {object|null} requestBodySchema - Extracted JSON/media payload schema
  */
@@ -365,7 +377,13 @@ export function extractEndpoints(openApiObj) {
       const allPathParams = Array.from(new Set([...templatePathVars, ...declaredPathParams]));
 
       // Security & Anonymous Access
-      const { isAnonymous, securityRequirements, scopesPerRequirement } = extractSecurity(operationObj, rootSecurity);
+      const {
+        isAnonymous,
+        isExplicitAnonymous,
+        hasExplicitSecurity,
+        securityRequirements,
+        scopesPerRequirement,
+      } = extractSecurity(operationObj, rootSecurity);
 
       // Roles from vendor extensions
       const requiredRoles = extractRoles(operationObj);
@@ -391,6 +409,8 @@ export function extractEndpoints(openApiObj) {
           return this.scopesPerRequirement;
         },
         isAnonymous,
+        isExplicitAnonymous,
+        hasExplicitSecurity,
         hasRequestBody: Boolean(operationObj.requestBody),
         requestBodySchema,
       });
