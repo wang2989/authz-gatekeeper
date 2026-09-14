@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # Antigravity files and context
 .antigravity/
+
+#VS Code Settings
+.vscode/
