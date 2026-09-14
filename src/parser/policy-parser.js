@@ -768,7 +768,7 @@ export function parseAuthPolicy(content) {
         ? { default_role: defaults.default_role.trim() }
         : {}),
       method_defaults: methodDefaults,
-    }
+    },
     routes: normalizedRoutes,
     parameters,
     rawPolicy: doc,
