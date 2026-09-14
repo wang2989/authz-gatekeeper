@@ -756,8 +756,11 @@ export function parseAuthPolicy(content) {
     jwt,
     defaults: {
       ...defaults,
+      ...(defaults.default_role !== undefined && defaults.default_role !== null
+        ? { default_role: defaults.default_role.trim() }
+        : {}),
       method_defaults: methodDefaults,
-    },
+    }
     routes: normalizedRoutes,
     parameters,
     rawPolicy: doc,
