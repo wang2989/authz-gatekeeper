@@ -34,18 +34,39 @@ export function interpolatePath(pathPattern, paramFixtures = {}) {
     return '';
   }
 
-  return pathPattern.replace(/\{([^}]+)\}/g, (_match, rawParamName) => {
-    const paramName = rawParamName.trim();
+  let interpolatedPath = '';
+  let cursor = 0;
+
+  while (cursor < pathPattern.length) {
+    const start = pathPattern.indexOf('{', cursor);
+    if (start === -1) {
+      interpolatedPath += pathPattern.slice(cursor);
+      break;
+    }
+
+    const end = pathPattern.indexOf('}', start + 1);
+    if (end === -1) {
+      interpolatedPath += pathPattern.slice(cursor);
+      break;
+    }
+
+    interpolatedPath += pathPattern.slice(cursor, start);
+    const paramName = pathPattern.slice(start + 1, end).trim();
     if (
       paramFixtures &&
       Object.prototype.hasOwnProperty.call(paramFixtures, paramName) &&
       paramFixtures[paramName] !== undefined &&
       paramFixtures[paramName] !== null
     ) {
-      return String(paramFixtures[paramName]);
+      interpolatedPath += String(paramFixtures[paramName]);
+    } else {
+      interpolatedPath += `mock-${paramName}`;
     }
-    return `mock-${paramName}`;
-  });
+
+    cursor = end + 1;
+  }
+
+  return interpolatedPath;
 }
 
 /**
