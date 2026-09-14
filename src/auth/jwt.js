@@ -492,6 +492,9 @@ export function verifyJwt(token, secretOrPublicKey, options = {}) {
 
   const clockTolerance = options.clockTolerance ?? options.leeway ?? 0;
   const now = options.currentTime ?? options.now ?? Math.floor(Date.now() / 1000);
+  if (!Number.isFinite(clockTolerance) || clockTolerance < 0 || !Number.isFinite(now)) {
+    throw new JwtError('clockTolerance/leeway must be finite and non-negative; currentTime/now must be finite', 'ERR_INVALID_INPUT');
+  }
 
   if (options.ignoreExpiration !== true && payload.exp !== undefined) {
     if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
