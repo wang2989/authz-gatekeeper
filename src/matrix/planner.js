@@ -116,11 +116,23 @@ export function generateTestMatrix(contractsOrReport, tenantConfig = {}, options
     effectiveTenantConfig = {};
   }
 
+  const resolveTenantIdFromContracts = (fixtureKey) => {
+    for (const contract of contracts) {
+      const tenantParameter = contract?.tenantParameter;
+      const tenantId = tenantParameter && contract?.fixtures?.[fixtureKey]?.[tenantParameter];
+      if (tenantId !== undefined && tenantId !== null && String(tenantId).trim().length > 0) {
+        return String(tenantId);
+      }
+    }
+    return null;
+  };
+
   const primaryTenantId =
     effectiveTenantConfig?.fixtures?.primary?.id ||
     effectiveTenantConfig?.primaryTenantId ||
     effectiveTenantConfig?.tenants?.fixtures?.primary?.id ||
     contractsOrReport?.authPolicy?.tenants?.fixtures?.primary?.id ||
+    resolveTenantIdFromContracts('primary') ||
     'tenant-alpha';
 
   const secondaryTenantId =
@@ -128,6 +140,7 @@ export function generateTestMatrix(contractsOrReport, tenantConfig = {}, options
     effectiveTenantConfig?.secondaryTenantId ||
     effectiveTenantConfig?.tenants?.fixtures?.secondary?.id ||
     contractsOrReport?.authPolicy?.tenants?.fixtures?.secondary?.id ||
+    resolveTenantIdFromContracts('secondary') ||
     'tenant-beta';
 
   const skipAnonymous = Boolean(effectiveOptions.skipAnonymous ?? effectiveTenantConfig.skipAnonymous);
@@ -156,10 +169,7 @@ export function generateTestMatrix(contractsOrReport, tenantConfig = {}, options
     }
 
     const primaryFixtures = { ...(contract.fixtures?.primary || {}) };
-    if (
-      contract.tenantParameter &&
-      (effectiveTenantConfig?.fixtures?.primary?.id || effectiveTenantConfig?.primaryTenantId)
-    ) {
+    if (contract.tenantParameter && primaryTenantId) {
       primaryFixtures[contract.tenantParameter] = primaryTenantId;
     }
     const targetPath = interpolatePath(route, primaryFixtures);
@@ -371,4 +381,3 @@ export function generateTestMatrix(contractsOrReport, tenantConfig = {}, options
 
   return vectors;
 }
-

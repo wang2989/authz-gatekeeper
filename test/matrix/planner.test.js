@@ -261,6 +261,36 @@ describe('Permutation Matrix Planner (src/matrix/planner.js)', () => {
       assert.equal(allowVector.persona.tenantId, 'corp-a');
       assert.equal(attackVector.persona.tenantId, 'corp-b');
     });
+
+    it('resolves tenant IDs from contract fixtures when called with contracts array', () => {
+      const contract = {
+        path: '/api/{org_id}/test',
+        method: 'GET',
+        isAnonymous: false,
+        authorizedRoles: ['Admin'],
+        unauthorizedRoles: [],
+        hasTenantBoundary: true,
+        tenantParameter: 'org_id',
+        fixtures: {
+          primary: { org_id: 'org-parent' },
+          secondary: { org_id: 'org-child' },
+        },
+      };
+
+      const matrix = generateTestMatrix([contract]);
+      const allowVector = matrix.find((v) => v.category === TEST_CATEGORIES.INTRA_TENANT_ALLOW);
+      const attackVector = matrix.find((v) => v.category === TEST_CATEGORIES.CROSS_TENANT_ATTACK);
+
+      assert.equal(allowVector.persona.tenantId, 'org-parent');
+      assert.equal(allowVector.persona.userId, 'user-org-parent-Admin');
+      assert.equal(allowVector.targetTenant, 'org-parent');
+      assert.equal(allowVector.path, '/api/org-parent/test');
+
+      assert.equal(attackVector.persona.tenantId, 'org-child');
+      assert.equal(attackVector.persona.userId, 'attacker-org-child-Admin');
+      assert.equal(attackVector.targetTenant, 'org-parent');
+      assert.equal(attackVector.path, '/api/org-parent/test');
+    });
   });
 
   describe('generateTestMatrix - Full Reconciled Specification Permutation', () => {
@@ -501,4 +531,3 @@ describe('Permutation Matrix Planner (src/matrix/planner.js)', () => {
     });
   });
 });
-
