@@ -577,6 +577,40 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
         (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
       );
     });
+
+    it('enforces exact expiration boundary with zero tolerance (RFC 7519 Section 4.1.4)', () => {
+      const exp = 1700000000;
+      const token = mintMockJwt(
+        { sub: 'boundary-user-zero-tolerance', exp },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      assert.throws(
+        () => verifyJwt(token, DEFAULT_SECRET, { currentTime: 1700000000, clockTolerance: 0 }),
+        (err) => err instanceof JwtError && err.code === 'ERR_TOKEN_EXPIRED'
+      );
+
+      const verified = verifyJwt(token, DEFAULT_SECRET, { currentTime: 1699999999, clockTolerance: 0 });
+      assert.strictEqual(verified.valid, true);
+    });
+
+    it('enforces exact expiration boundary with clockTolerance / leeway', () => {
+      const exp = 1700000000;
+      const token = mintMockJwt(
+        { sub: 'boundary-user-leeway', exp },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      assert.throws(
+        () => verifyJwt(token, DEFAULT_SECRET, { currentTime: 1700000010, clockTolerance: 10 }),
+        (err) => err instanceof JwtError && err.code === 'ERR_TOKEN_EXPIRED'
+      );
+
+      const verified = verifyJwt(token, DEFAULT_SECRET, { currentTime: 1700000009, clockTolerance: 10 });
+      assert.strictEqual(verified.valid, true);
+    });
   });
 
   describe('Issuer (iss) & Audience (aud) Verification', () => {

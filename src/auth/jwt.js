@@ -497,7 +497,7 @@ export function verifyJwt(token, secretOrPublicKey, options = {}) {
     if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
       throw new JwtError('Invalid exp claim in payload', 'ERR_INVALID_TOKEN');
     }
-    if (now > payload.exp + clockTolerance) {
+    if (now >= payload.exp + clockTolerance) {
       throw new JwtError('Token expired', 'ERR_TOKEN_EXPIRED');
     }
   }
