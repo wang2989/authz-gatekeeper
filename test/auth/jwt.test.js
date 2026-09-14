@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -8,6 +9,7 @@ import {
   base64UrlEncode,
   base64UrlDecode,
   generateKeyPair,
+  detectKeyType,
   SUPPORTED_ALGORITHMS,
   JwtError,
   setNestedProperty,
@@ -27,6 +29,7 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
       assert.strictEqual(IndexExports.base64UrlEncode, base64UrlEncode);
       assert.strictEqual(IndexExports.base64UrlDecode, base64UrlDecode);
       assert.strictEqual(IndexExports.generateKeyPair, generateKeyPair);
+      assert.strictEqual(IndexExports.detectKeyType, detectKeyType);
       assert.strictEqual(IndexExports.SUPPORTED_ALGORITHMS, SUPPORTED_ALGORITHMS);
       assert.strictEqual(IndexExports.JwtError, JwtError);
       assert.strictEqual(IndexExports.setNestedProperty, setNestedProperty);
@@ -689,6 +692,234 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
       assert.throws(
         () => verifyJwt('one.two.three.four', DEFAULT_SECRET),
         (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+  });
+
+  describe('detectKeyType Utility', () => {
+    it('identifies RSA public and private key PEM strings', () => {
+      const keyPair = generateKeyPair('RS256');
+      const pubInfo = detectKeyType(keyPair.publicKey);
+      assert.strictEqual(pubInfo.type, 'public');
+      assert.strictEqual(pubInfo.asymmetricKeyType, 'rsa');
+
+      const privInfo = detectKeyType(keyPair.privateKey);
+      assert.strictEqual(privInfo.type, 'private');
+      assert.strictEqual(privInfo.asymmetricKeyType, 'rsa');
+    });
+
+    it('identifies EC public and private key PEM strings', () => {
+      const keyPair = generateKeyPair('ES256');
+      const pubInfo = detectKeyType(keyPair.publicKey);
+      assert.strictEqual(pubInfo.type, 'public');
+      assert.strictEqual(pubInfo.asymmetricKeyType, 'ec');
+
+      const privInfo = detectKeyType(keyPair.privateKey);
+      assert.strictEqual(privInfo.type, 'private');
+      assert.strictEqual(privInfo.asymmetricKeyType, 'ec');
+    });
+
+    it('identifies crypto.KeyObject instances', () => {
+      const keyPair = generateKeyPair('RS256');
+      const pubKeyObj = crypto.createPublicKey(keyPair.publicKey);
+      const privKeyObj = crypto.createPrivateKey(keyPair.privateKey);
+      const secretKeyObj = crypto.createSecretKey(Buffer.from('test-secret'));
+
+      assert.deepStrictEqual(detectKeyType(pubKeyObj), { type: 'public', asymmetricKeyType: 'rsa' });
+      assert.deepStrictEqual(detectKeyType(privKeyObj), { type: 'private', asymmetricKeyType: 'rsa' });
+      assert.deepStrictEqual(detectKeyType(secretKeyObj), { type: 'secret', asymmetricKeyType: null });
+    });
+
+    it('classifies raw string and Buffer secrets as symmetric secrets', () => {
+      assert.deepStrictEqual(detectKeyType('my-hmac-shared-secret'), { type: 'secret', asymmetricKeyType: null });
+      assert.deepStrictEqual(detectKeyType(Buffer.from('my-hmac-shared-secret')), { type: 'secret', asymmetricKeyType: null });
+    });
+
+    it('throws ERR_INVALID_INPUT when PEM string header is present but malformed', () => {
+      assert.throws(
+        () => detectKeyType('-----BEGIN PUBLIC KEY-----\nNOT_VALID_BASE64!!!\n-----END PUBLIC KEY-----'),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+  });
+
+  describe('mintMockJwt Key Compatibility Enforcement', () => {
+    it('throws ERR_UNSUPPORTED_ALGORITHM when minting RS256 with symmetric secret', () => {
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, DEFAULT_SECRET, 'RS256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+
+    it('throws ERR_INVALID_INPUT when minting RS256 with RSA public key', () => {
+      const rsaKeyPair = generateKeyPair('RS256');
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, rsaKeyPair.publicKey, 'RS256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+
+    it('throws ERR_UNSUPPORTED_ALGORITHM when minting ES256 with symmetric secret', () => {
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, DEFAULT_SECRET, 'ES256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+
+    it('throws ERR_INVALID_INPUT when minting ES256 with EC public key', () => {
+      const ecKeyPair = generateKeyPair('ES256');
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, ecKeyPair.publicKey, 'ES256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+
+    it('throws ERR_UNSUPPORTED_ALGORITHM when minting HS256 with asymmetric key', () => {
+      const rsaKeyPair = generateKeyPair('RS256');
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, rsaKeyPair.privateKey, 'HS256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, rsaKeyPair.publicKey, 'HS256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+  });
+
+  describe('Algorithm Confusion / Key Confusion Attack Prevention', () => {
+    it('prevents RS256-to-HS256 confusion attack when attacker signs with RSA public key', () => {
+      const keyPair = generateKeyPair('RS256');
+
+      // Attacker creates an HS256 token using the RSA publicKey PEM string as the HMAC secret
+      const headerB64 = base64UrlEncode({ typ: 'JWT', alg: 'HS256' });
+      const payloadB64 = base64UrlEncode({
+        sub: 'forged-admin',
+        role: 'SuperAdmin',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+      const signingInput = headerB64 + '.' + payloadB64;
+      const signatureB64 = crypto
+        .createHmac('sha256', keyPair.publicKey)
+        .update(signingInput)
+        .digest()
+        .toString('base64url');
+      const attackerToken = signingInput + '.' + signatureB64;
+
+      assert.throws(
+        () => verifyJwt(attackerToken, keyPair.publicKey),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.match(err.message, /algorithm confusion attack detected/i);
+          return true;
+        }
+      );
+    });
+
+    it('prevents ES256-to-HS256 confusion attack when attacker signs with EC public key', () => {
+      const keyPair = generateKeyPair('ES256');
+
+      // Attacker creates an HS256 token using the EC publicKey PEM string as the HMAC secret
+      const headerB64 = base64UrlEncode({ typ: 'JWT', alg: 'HS256' });
+      const payloadB64 = base64UrlEncode({
+        sub: 'forged-admin',
+        role: 'SuperAdmin',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+      const signingInput = headerB64 + '.' + payloadB64;
+      const signatureB64 = crypto
+        .createHmac('sha256', keyPair.publicKey)
+        .update(signingInput)
+        .digest()
+        .toString('base64url');
+      const attackerToken = signingInput + '.' + signatureB64;
+
+      assert.throws(
+        () => verifyJwt(attackerToken, keyPair.publicKey),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.match(err.message, /algorithm confusion attack detected/i);
+          return true;
+        }
+      );
+    });
+
+    it('prevents asymmetric algorithm verification against symmetric secret', () => {
+      // Attacker sends an RS256 token verified against a symmetric string secret
+      const rsaKeyPair = generateKeyPair('RS256');
+      const rsaToken = mintMockJwt({ sub: 'user-rsa' }, rsaKeyPair.privateKey, 'RS256');
+
+      assert.throws(
+        () => verifyJwt(rsaToken, DEFAULT_SECRET),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.match(err.message, /algorithm confusion attack detected/i);
+          return true;
+        }
+      );
+
+      // Attacker sends an ES256 token verified against a symmetric string secret
+      const ecKeyPair = generateKeyPair('ES256');
+      const ecToken = mintMockJwt({ sub: 'user-ec' }, ecKeyPair.privateKey, 'ES256');
+
+      assert.throws(
+        () => verifyJwt(ecToken, DEFAULT_SECRET),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.match(err.message, /algorithm confusion attack detected/i);
+          return true;
+        }
+      );
+    });
+
+    it('valid verification still succeeds for legitimate tokens', () => {
+      // RSA tokens with RSA public key succeed
+      const rsaKeyPair = generateKeyPair('RS256');
+      const rsaToken = mintMockJwt({ sub: 'rsa-user', role: 'SuperAdmin' }, rsaKeyPair.privateKey, 'RS256');
+      const rsaVerified = verifyJwt(rsaToken, rsaKeyPair.publicKey);
+      assert.strictEqual(rsaVerified.valid, true);
+      assert.strictEqual(rsaVerified.payload.sub, 'rsa-user');
+      assert.strictEqual(rsaVerified.payload.role, 'SuperAdmin');
+
+      // EC tokens with EC public key succeed
+      const ecKeyPair = generateKeyPair('ES256');
+      const ecToken = mintMockJwt({ sub: 'ec-user', tenant_id: 'tenant-omega' }, ecKeyPair.privateKey, 'ES256');
+      const ecVerified = verifyJwt(ecToken, ecKeyPair.publicKey);
+      assert.strictEqual(ecVerified.valid, true);
+      assert.strictEqual(ecVerified.payload.sub, 'ec-user');
+      assert.strictEqual(ecVerified.payload.tenant_id, 'tenant-omega');
+
+      // HMAC tokens with symmetric secret succeed
+      const hmacToken = mintMockJwt({ sub: 'hmac-user', role: 'Viewer' }, DEFAULT_SECRET, 'HS256');
+      const hmacVerified = verifyJwt(hmacToken, DEFAULT_SECRET);
+      assert.strictEqual(hmacVerified.valid, true);
+      assert.strictEqual(hmacVerified.payload.sub, 'hmac-user');
+      assert.strictEqual(hmacVerified.payload.role, 'Viewer');
+
+      // Explicit options.algorithms: ['RS256'] works
+      const rsaExplicit = verifyJwt(rsaToken, rsaKeyPair.publicKey, {
+        algorithms: ['RS256'],
+      });
+      assert.strictEqual(rsaExplicit.valid, true);
+
+      // Explicit options.algorithm: 'RS256' works
+      const rsaSingleAlg = verifyJwt(rsaToken, rsaKeyPair.publicKey, {
+        algorithm: 'RS256',
+      });
+      assert.strictEqual(rsaSingleAlg.valid, true);
+    });
+
+    it('enforces caller-supplied options.algorithm restriction on mismatch', () => {
+      const hmacToken = mintMockJwt({ sub: 'user-hmac' }, DEFAULT_SECRET, 'HS256');
+      assert.throws(
+        () => verifyJwt(hmacToken, DEFAULT_SECRET, { algorithm: 'HS384' }),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
       );
     });
   });

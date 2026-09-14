@@ -156,6 +156,65 @@ export function generateKeyPair(algorithm = 'RS256') {
 }
 
 /**
+ * Detects the key type and asymmetric algorithm family from a secret, PEM string/Buffer, or KeyObject.
+ *
+ * @param {string|Buffer|crypto.KeyObject} secretOrKey - Cryptographic key or secret
+ * @returns {{ type: string, asymmetricKeyType: string|null }} Key type metadata
+ */
+export function detectKeyType(secretOrKey) {
+  if (
+    secretOrKey instanceof crypto.KeyObject ||
+    (typeof secretOrKey === 'object' && secretOrKey !== null && typeof secretOrKey.type === 'string' && 'asymmetricKeyType' in secretOrKey)
+  ) {
+    return {
+      type: secretOrKey.type,
+      asymmetricKeyType: secretOrKey.asymmetricKeyType || null,
+    };
+  }
+
+  if (typeof secretOrKey === 'string' || Buffer.isBuffer(secretOrKey)) {
+    const str = typeof secretOrKey === 'string' ? secretOrKey : secretOrKey.toString('utf8');
+    if (/-----BEGIN [A-Z0-9_\- ]*(?:KEY|CERTIFICATE)-----/.test(str)) {
+      try {
+        if (str.includes('PRIVATE KEY')) {
+          try {
+            const privKey = crypto.createPrivateKey(secretOrKey);
+            return {
+              type: privKey.type,
+              asymmetricKeyType: privKey.asymmetricKeyType || null,
+            };
+          } catch {
+            const pubKey = crypto.createPublicKey(secretOrKey);
+            return {
+              type: pubKey.type,
+              asymmetricKeyType: pubKey.asymmetricKeyType || null,
+            };
+          }
+        } else {
+          try {
+            const pubKey = crypto.createPublicKey(secretOrKey);
+            return {
+              type: pubKey.type,
+              asymmetricKeyType: pubKey.asymmetricKeyType || null,
+            };
+          } catch {
+            const privKey = crypto.createPrivateKey(secretOrKey);
+            return {
+              type: privKey.type,
+              asymmetricKeyType: privKey.asymmetricKeyType || null,
+            };
+          }
+        }
+      } catch (err) {
+        throw new JwtError(`Failed to parse PEM key: ${err.message}`, 'ERR_INVALID_INPUT');
+      }
+    }
+  }
+
+  return { type: 'secret', asymmetricKeyType: null };
+}
+
+/**
  * Mints a signed mock JWT token string using Node.js native crypto.
  *
  * @param {Record<string, any>} claims - JWT payload claims
@@ -175,6 +234,43 @@ export function mintMockJwt(claims = {}, secretOrPrivateKey, algorithm = 'HS256'
       `Unsupported algorithm: ${algorithm}. Supported algorithms: ${Object.values(SUPPORTED_ALGORITHMS).join(', ')}`,
       'ERR_UNSUPPORTED_ALGORITHM'
     );
+  }
+
+  const keyInfo = detectKeyType(secretOrPrivateKey);
+
+  if (normAlg === 'RS256') {
+    if (keyInfo.asymmetricKeyType !== 'rsa') {
+      throw new JwtError(
+        `Algorithm RS256 requires an RSA private key, but received ${keyInfo.asymmetricKeyType || keyInfo.type} key`,
+        'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    }
+    if (keyInfo.type === 'public') {
+      throw new JwtError(
+        'Algorithm RS256 requires an RSA private key, but received a public key',
+        'ERR_INVALID_INPUT'
+      );
+    }
+  } else if (normAlg === 'ES256') {
+    if (keyInfo.asymmetricKeyType !== 'ec') {
+      throw new JwtError(
+        `Algorithm ES256 requires an EC private key, but received ${keyInfo.asymmetricKeyType || keyInfo.type} key`,
+        'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    }
+    if (keyInfo.type === 'public') {
+      throw new JwtError(
+        'Algorithm ES256 requires an EC private key, but received a public key',
+        'ERR_INVALID_INPUT'
+      );
+    }
+  } else if (normAlg === 'HS256' || normAlg === 'HS384' || normAlg === 'HS512') {
+    if (keyInfo.type !== 'secret' || keyInfo.asymmetricKeyType !== null) {
+      throw new JwtError(
+        `Algorithm ${normAlg} requires a symmetric secret key, but received ${keyInfo.asymmetricKeyType || keyInfo.type} key`,
+        'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    }
   }
 
   const header = {
@@ -282,8 +378,49 @@ export function verifyJwt(token, secretOrPublicKey, options = {}) {
   }
 
   const normAlg = alg.toUpperCase();
-  if (options.algorithms && Array.isArray(options.algorithms)) {
-    const allowed = options.algorithms.map((a) => a.toUpperCase());
+  const keyInfo = detectKeyType(secretOrPublicKey);
+
+  // Automatically bind permitted algorithms to the key type by default to prevent algorithm confusion attacks
+  if (keyInfo.asymmetricKeyType === 'rsa') {
+    if (normAlg !== 'RS256') {
+      throw new JwtError(
+        `Algorithm "${normAlg}" is not permitted for RSA keys: algorithm confusion attack detected`,
+        'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    }
+  } else if (keyInfo.asymmetricKeyType === 'ec') {
+    if (normAlg !== 'ES256') {
+      throw new JwtError(
+        `Algorithm "${normAlg}" is not permitted for EC keys: algorithm confusion attack detected`,
+        'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    }
+  } else if (keyInfo.type === 'secret') {
+    if (!['HS256', 'HS384', 'HS512'].includes(normAlg)) {
+      throw new JwtError(
+        `Algorithm "${normAlg}" is not permitted for symmetric secrets: algorithm confusion attack detected`,
+        'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    }
+  } else {
+    throw new JwtError(
+      `Unsupported key type "${keyInfo.type}" for JWT verification`,
+      'ERR_UNSUPPORTED_ALGORITHM'
+    );
+  }
+
+  // Caller-provided algorithm restrictions
+  if (options.algorithm && typeof options.algorithm === 'string') {
+    if (normAlg !== options.algorithm.toUpperCase()) {
+      throw new JwtError(
+        `Algorithm "${normAlg}" does not match required options.algorithm "${options.algorithm}"`,
+        'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    }
+  }
+
+  if (options.algorithms && (Array.isArray(options.algorithms) || options.algorithms instanceof Set)) {
+    const allowed = Array.from(options.algorithms).map((a) => String(a).toUpperCase());
     if (!allowed.includes(normAlg)) {
       throw new JwtError(`Algorithm "${normAlg}" is not allowed by options.algorithms`, 'ERR_UNSUPPORTED_ALGORITHM');
     }
