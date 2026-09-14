@@ -7,6 +7,7 @@ import { loadOpenApiSpec } from './parser/openapi-loader.js';
 import { extractEndpoints } from './parser/openapi-extractor.js';
 import { loadAuthPolicy, parseAuthPolicy, AuthPolicy, PolicyValidationError, PolicySyntaxError } from './parser/policy-parser.js';
 import { reconcile, ReconciliationError, RULE_SOURCES } from './parser/reconciler.js';
+import { generateTestMatrix, calculateExpectedStatus, TEST_CATEGORIES, interpolatePath } from './matrix/planner.js';
 
 export {
   parseCliArgs,
@@ -22,6 +23,10 @@ export {
   reconcile,
   ReconciliationError,
   RULE_SOURCES,
+  generateTestMatrix,
+  calculateExpectedStatus,
+  TEST_CATEGORIES,
+  interpolatePath,
 };
 
 const __filename = fileURLToPath(import.meta.url);
