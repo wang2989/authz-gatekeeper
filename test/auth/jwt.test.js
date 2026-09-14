@@ -1,0 +1,1467 @@
+import crypto from 'node:crypto';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  mintMockJwt,
+  synthesizePersonaJwt,
+  verifyJwt,
+  decodeJwt,
+  base64UrlEncode,
+  base64UrlDecode,
+  generateKeyPair,
+  detectKeyType,
+  SUPPORTED_ALGORITHMS,
+  JwtError,
+  setNestedProperty,
+} from '../../src/auth/jwt.js';
+import * as IndexExports from '../../src/index.js';
+import { AuthPolicy } from '../../src/parser/policy-parser.js';
+
+describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
+  const DEFAULT_SECRET = 'super-secure-mock-test-secret-32-chars-long';
+
+  describe('Package Exports & Index Re-exports', () => {
+    it('re-exports all required JWT entities from src/index.js', () => {
+      assert.strictEqual(IndexExports.mintMockJwt, mintMockJwt);
+      assert.strictEqual(IndexExports.synthesizePersonaJwt, synthesizePersonaJwt);
+      assert.strictEqual(IndexExports.verifyJwt, verifyJwt);
+      assert.strictEqual(IndexExports.decodeJwt, decodeJwt);
+      assert.strictEqual(IndexExports.base64UrlEncode, base64UrlEncode);
+      assert.strictEqual(IndexExports.base64UrlDecode, base64UrlDecode);
+      assert.strictEqual(IndexExports.generateKeyPair, generateKeyPair);
+      assert.strictEqual(IndexExports.detectKeyType, detectKeyType);
+      assert.strictEqual(IndexExports.SUPPORTED_ALGORITHMS, SUPPORTED_ALGORITHMS);
+      assert.strictEqual(IndexExports.JwtError, JwtError);
+      assert.strictEqual(IndexExports.setNestedProperty, setNestedProperty);
+    });
+
+    it('freezes SUPPORTED_ALGORITHMS with required HMAC, RSA, and EC algorithms', () => {
+      assert.ok(Object.isFrozen(SUPPORTED_ALGORITHMS));
+      assert.strictEqual(SUPPORTED_ALGORITHMS.HS256, 'HS256');
+      assert.strictEqual(SUPPORTED_ALGORITHMS.HS384, 'HS384');
+      assert.strictEqual(SUPPORTED_ALGORITHMS.HS512, 'HS512');
+      assert.strictEqual(SUPPORTED_ALGORITHMS.RS256, 'RS256');
+      assert.strictEqual(SUPPORTED_ALGORITHMS.ES256, 'ES256');
+    });
+
+    it('initializes JwtError with name and code properties', () => {
+      const err = new JwtError('Algorithm failure', 'ERR_UNSUPPORTED_ALGORITHM');
+      assert.ok(err instanceof Error);
+      assert.strictEqual(err.name, 'JwtError');
+      assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+      assert.strictEqual(err.message, 'Algorithm failure');
+    });
+  });
+
+  describe('base64UrlEncode & base64UrlDecode', () => {
+    it('encodes and decodes simple ASCII strings', () => {
+      const input = 'Hello Authz Gatekeeper!';
+      const encoded = base64UrlEncode(input);
+      assert.ok(!encoded.includes('='));
+      assert.ok(!encoded.includes('+'));
+      assert.ok(!encoded.includes('/'));
+      const decoded = base64UrlDecode(encoded);
+      assert.strictEqual(decoded, input);
+    });
+
+    it('encodes and decodes raw binary Buffer', () => {
+      const buf = Buffer.from([0x00, 0xff, 0x12, 0x34, 0x56, 0x78, 0x9a]);
+      const encoded = base64UrlEncode(buf);
+      const decodedBuf = base64UrlDecode(encoded, 'buffer');
+      assert.ok(Buffer.isBuffer(decodedBuf));
+      assert.deepStrictEqual(decodedBuf, buf);
+    });
+
+    it('encodes and decodes complex Unicode strings (emojis, CJK characters)', () => {
+      const unicodeStr = '🛡️ 安全 gatekeeper 🚀 한국어 Русские символы';
+      const encoded = base64UrlEncode(unicodeStr);
+      assert.strictEqual(base64UrlDecode(encoded), unicodeStr);
+    });
+
+    it('encodes JSON objects directly and decodes with parseJson: true', () => {
+      const obj = { sub: 'user-123', roles: ['Admin', 'Auditor'], active: true, count: 42 };
+      const encoded = base64UrlEncode(obj);
+      const decoded = base64UrlDecode(encoded, true);
+      assert.deepStrictEqual(decoded, obj);
+    });
+
+    it('throws ERR_INVALID_INPUT if input to base64UrlEncode is null or undefined', () => {
+      assert.throws(() => base64UrlEncode(null), {
+        code: 'ERR_INVALID_INPUT',
+      });
+      assert.throws(() => base64UrlEncode(undefined), {
+        code: 'ERR_INVALID_INPUT',
+      });
+    });
+
+    it('throws ERR_INVALID_INPUT if input to base64UrlDecode is not a string', () => {
+      assert.throws(() => base64UrlDecode(123), {
+        code: 'ERR_INVALID_INPUT',
+      });
+    });
+
+    it('throws ERR_INVALID_TOKEN when parseJson: true fails on non-JSON content', () => {
+      const notJsonEncoded = base64UrlEncode('not-a-valid-json-string');
+      assert.throws(() => base64UrlDecode(notJsonEncoded, true), {
+        code: 'ERR_INVALID_TOKEN',
+      });
+    });
+
+    it('rejects base64url strings containing padding (=, ==) with ERR_INVALID_TOKEN', () => {
+      const paddedStrings = [
+        'AQ==',
+        'AQ=',
+        'eyJhbGciOiJIUzI1NiJ9=',
+        'eyJhbGciOiJIUzI1NiJ9==',
+        'dGVzdA==',
+        'dGVzdA=',
+      ];
+      for (const padded of paddedStrings) {
+        assert.throws(
+          () => base64UrlDecode(padded),
+          (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN',
+          `Expected ${padded} to throw ERR_INVALID_TOKEN`
+        );
+      }
+    });
+
+    it('rejects base64url strings containing standard base64 characters (+, /) with ERR_INVALID_TOKEN', () => {
+      const standardB64Strings = [
+        'hello+world',
+        'foo/bar',
+        '+',
+        '/',
+        'a+b/c',
+        'aGVsbG8+d29ybGQ',
+        'aGVsbG8/d29ybGQ',
+      ];
+      for (const str of standardB64Strings) {
+        assert.throws(
+          () => base64UrlDecode(str),
+          (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN',
+          `Expected ${str} to throw ERR_INVALID_TOKEN`
+        );
+      }
+    });
+
+    it('rejects base64url strings with invalid characters (spaces, tabs, newlines, special characters)', () => {
+      const invalidCharStrings = [
+        'hello world',
+        'hello\tworld',
+        'hello\nworld',
+        'hello\r\nworld',
+        'aGVsbG8 @d29ybGQ',
+        'test!123',
+        'token#hash',
+        'data$value',
+        'percent%20',
+      ];
+      for (const str of invalidCharStrings) {
+        assert.throws(
+          () => base64UrlDecode(str),
+          (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN',
+          `Expected ${str} to throw ERR_INVALID_TOKEN`
+        );
+      }
+    });
+
+    it('rejects non-canonical trailing bits with ERR_INVALID_TOKEN', () => {
+      const nonCanonicalStrings = [
+        'A==',
+        'A',
+        'AR',
+        'aGVsbG9',
+        'dGVzdD1',
+      ];
+      for (const str of nonCanonicalStrings) {
+        assert.throws(
+          () => base64UrlDecode(str),
+          (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN',
+          `Expected ${str} to throw ERR_INVALID_TOKEN`
+        );
+      }
+    });
+  });
+
+  describe('setNestedProperty', () => {
+    it('sets top-level property path', () => {
+      const target = {};
+      setNestedProperty(target, 'role', 'OrgAdmin');
+      assert.strictEqual(target.role, 'OrgAdmin');
+    });
+
+    it('sets nested dot-notation property path (e.g. realm_access.roles)', () => {
+      const target = {};
+      setNestedProperty(target, 'realm_access.roles', ['SuperAdmin']);
+      assert.deepStrictEqual(target.realm_access, { roles: ['SuperAdmin'] });
+    });
+
+    it('sets deeply nested paths and preserves existing sibling properties', () => {
+      const target = {
+        meta: { existingKey: 'preserved' },
+      };
+      setNestedProperty(target, 'meta.custom.nested.id', 999);
+      assert.strictEqual(target.meta.existingKey, 'preserved');
+      assert.strictEqual(target.meta.custom.nested.id, 999);
+    });
+
+    it('guards against prototype pollution (__proto__, constructor, prototype)', () => {
+      const target = {};
+      setNestedProperty(target, '__proto__.polluted', 'yes');
+      setNestedProperty(target, 'constructor.prototype.polluted', 'yes');
+      assert.strictEqual(Object.prototype.polluted, undefined);
+      assert.strictEqual(target.polluted, undefined);
+    });
+
+    it('throws TypeError if target is not a non-null object', () => {
+      assert.throws(() => setNestedProperty(null, 'a.b', 1), TypeError);
+      assert.throws(() => setNestedProperty('string', 'a.b', 1), TypeError);
+      assert.throws(() => setNestedProperty([1, 2], 'a.b', 1), TypeError);
+    });
+  });
+
+  describe('mintMockJwt & verifyJwt - Symmetric HMAC (HS256, HS384, HS512)', () => {
+    it('mints and verifies an HS256 token with standard claims', () => {
+      const claims = { sub: 'user-alpha-001', role: 'Member', tenant_id: 'tenant-alpha' };
+      const token = mintMockJwt(claims, DEFAULT_SECRET, 'HS256');
+
+      const parts = token.split('.');
+      assert.strictEqual(parts.length, 3);
+
+      const verification = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verification.valid, true);
+      assert.strictEqual(verification.header.alg, 'HS256');
+      assert.strictEqual(verification.header.typ, 'JWT');
+      assert.strictEqual(verification.payload.sub, 'user-alpha-001');
+      assert.strictEqual(verification.payload.role, 'Member');
+      assert.strictEqual(verification.payload.tenant_id, 'tenant-alpha');
+      assert.ok(typeof verification.payload.iat === 'number');
+      assert.ok(typeof verification.payload.exp === 'number');
+      assert.ok(typeof verification.payload.jti === 'string');
+      assert.strictEqual(verification.payload.exp - verification.payload.iat, 3600);
+    });
+
+    it('mints and verifies an HS384 token with Buffer secret and custom expiresIn', () => {
+      const secretBuf = Buffer.from(DEFAULT_SECRET);
+      const token = mintMockJwt({ sub: 'user-384' }, secretBuf, 'HS384', {
+        expiresInSeconds: 7200,
+        header: { kid: 'key-hs384-v1' },
+      });
+
+      const verification = verifyJwt(token, secretBuf);
+      assert.strictEqual(verification.valid, true);
+      assert.strictEqual(verification.header.alg, 'HS384');
+      assert.strictEqual(verification.header.kid, 'key-hs384-v1');
+      assert.strictEqual(verification.payload.exp - verification.payload.iat, 7200);
+    });
+
+    it('mints and verifies an HS512 token', () => {
+      const token = mintMockJwt({ sub: 'user-512' }, DEFAULT_SECRET, 'HS512');
+      const verification = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verification.valid, true);
+      assert.strictEqual(verification.header.alg, 'HS512');
+      assert.strictEqual(verification.payload.sub, 'user-512');
+    });
+
+    it('throws ERR_INVALID_SIGNATURE if verified with incorrect secret', () => {
+      const token = mintMockJwt({ sub: 'user-alpha' }, DEFAULT_SECRET, 'HS256');
+      assert.throws(
+        () => verifyJwt(token, 'different-wrong-secret-key-00000000'),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_SIGNATURE'
+      );
+    });
+  });
+
+  describe('mintMockJwt & verifyJwt - Asymmetric RSA (RS256)', () => {
+    it('generates RSA 2048-bit keypair and verifies valid signature', () => {
+      const keyPair = generateKeyPair('RS256');
+      assert.ok(keyPair.publicKey.includes('BEGIN PUBLIC KEY'));
+      assert.ok(keyPair.privateKey.includes('BEGIN PRIVATE KEY'));
+
+      const token = mintMockJwt(
+        { sub: 'rsa-user', role: 'SuperAdmin' },
+        keyPair.privateKey,
+        'RS256'
+      );
+
+      const verification = verifyJwt(token, keyPair.publicKey);
+      assert.strictEqual(verification.valid, true);
+      assert.strictEqual(verification.header.alg, 'RS256');
+      assert.strictEqual(verification.payload.sub, 'rsa-user');
+      assert.strictEqual(verification.payload.role, 'SuperAdmin');
+    });
+
+    it('rejects RS256 token signed by an unrelated RSA key', () => {
+      const keyPairA = generateKeyPair('RS256');
+      const keyPairB = generateKeyPair('RS256');
+
+      const token = mintMockJwt({ sub: 'attacker' }, keyPairA.privateKey, 'RS256');
+
+      assert.throws(
+        () => verifyJwt(token, keyPairB.publicKey),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_SIGNATURE'
+      );
+    });
+  });
+
+  describe('mintMockJwt & verifyJwt - Asymmetric ECDSA (ES256)', () => {
+    it('generates EC prime256v1 keypair and signs in IEEE P1363 format', () => {
+      const keyPair = generateKeyPair('ES256');
+      assert.ok(keyPair.publicKey.includes('BEGIN PUBLIC KEY'));
+      assert.ok(keyPair.privateKey.includes('BEGIN PRIVATE KEY'));
+
+      const token = mintMockJwt(
+        { sub: 'ec-user', tenant_id: 'tenant-omega' },
+        keyPair.privateKey,
+        'ES256'
+      );
+
+      // Verify signature is 64 raw bytes (IEEE P1363 for P-256)
+      const sigB64 = token.split('.')[2];
+      const sigBuf = Buffer.from(sigB64, 'base64url');
+      assert.strictEqual(sigBuf.length, 64);
+
+      const verification = verifyJwt(token, keyPair.publicKey);
+      assert.strictEqual(verification.valid, true);
+      assert.strictEqual(verification.header.alg, 'ES256');
+      assert.strictEqual(verification.payload.sub, 'ec-user');
+      assert.strictEqual(verification.payload.tenant_id, 'tenant-omega');
+    });
+
+    it('rejects ES256 token signed by an unrelated EC key', () => {
+      const keyPairA = generateKeyPair('ES256');
+      const keyPairB = generateKeyPair('ES256');
+
+      const token = mintMockJwt({ sub: 'ec-user' }, keyPairA.privateKey, 'ES256');
+
+      assert.throws(
+        () => verifyJwt(token, keyPairB.publicKey),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_SIGNATURE'
+      );
+    });
+
+    it('throws ERR_UNSUPPORTED_ALGORITHM when generateKeyPair is called with invalid algorithm', () => {
+      assert.throws(
+        () => generateKeyPair('ED25519'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+  });
+
+  describe('Tampering Rejection & Integrity Checks', () => {
+    it('detects and rejects tampered payload (privilege escalation attack)', () => {
+      const legitimateToken = mintMockJwt(
+        { sub: 'user-1', role: 'Viewer', tenant_id: 'tenant-alpha' },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      const parts = legitimateToken.split('.');
+      const payload = base64UrlDecode(parts[1], true);
+      // Attacker elevates role from Viewer to SuperAdmin
+      payload.role = 'SuperAdmin';
+      const tamperedPayloadB64 = base64UrlEncode(payload);
+
+      const tamperedToken = `${parts[0]}.${tamperedPayloadB64}.${parts[2]}`;
+
+      assert.throws(
+        () => verifyJwt(tamperedToken, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_SIGNATURE'
+      );
+    });
+
+    it('detects and rejects tampered header (algorithm switching attack)', () => {
+      const legitimateToken = mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256');
+      const parts = legitimateToken.split('.');
+      const header = base64UrlDecode(parts[0], true);
+      header.alg = 'HS384';
+      const tamperedHeaderB64 = base64UrlEncode(header);
+
+      const tamperedToken = `${tamperedHeaderB64}.${parts[1]}.${parts[2]}`;
+
+      assert.throws(
+        () => verifyJwt(tamperedToken, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_SIGNATURE'
+      );
+    });
+
+    it('rejects corrupted / truncated signature bytes', () => {
+      const token = mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256');
+      const parts = token.split('.');
+      const corruptedSig = parts[2].slice(0, -4) + 'AAAA';
+      const corruptedToken = `${parts[0]}.${parts[1]}.${corruptedSig}`;
+
+      assert.throws(
+        () => verifyJwt(corruptedToken, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_SIGNATURE'
+      );
+    });
+
+    it('rejects tokens with padded header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'user-padded' }, DEFAULT_SECRET, 'HS256');
+      const [h, p, s] = token.split('.');
+
+      assert.throws(
+        () => verifyJwt(`${h}=.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}==.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}=.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}==.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${s}=`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${s}==`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('rejects tokens with + or / in header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'user-std-b64' }, DEFAULT_SECRET, 'HS256');
+      const [h, p, s] = token.split('.');
+
+      assert.throws(
+        () => verifyJwt(`${h}+.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}/.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}+.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}/.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${s}+`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${s}/`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('rejects tokens with non-canonical base64url encoding in header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'user-canon' }, DEFAULT_SECRET, 'HS256', {
+        header: { kid: 'key-1' },
+      });
+      const [h, p, s] = token.split('.');
+
+      function findNonCanonical(segment) {
+        for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_') {
+          const candidate = segment.slice(0, -1) + c;
+          if (candidate !== segment) {
+            const buf = Buffer.from(candidate, 'base64url');
+            if (buf.toString('base64url') === segment) {
+              return candidate;
+            }
+          }
+        }
+        return segment + 'A';
+      }
+
+      const nonCanonH = findNonCanonical(h);
+      const nonCanonP = findNonCanonical(p);
+      const nonCanonS = findNonCanonical(s);
+
+      assert.throws(
+        () => verifyJwt(`${nonCanonH}.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${nonCanonP}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${nonCanonS}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('legitimate canonically-encoded tokens continue to verify cleanly', () => {
+      const token = mintMockJwt(
+        { sub: 'legit-user', role: 'Admin', tenant_id: 'tenant-1' },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+      const verified = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verified.valid, true);
+      assert.strictEqual(verified.payload.sub, 'legit-user');
+      assert.strictEqual(verified.payload.role, 'Admin');
+    });
+  });
+
+  describe('Expiration & Clock Tolerance / Leeway', () => {
+    it('rejects expired token with ERR_TOKEN_EXPIRED', () => {
+      const now = Math.floor(Date.now() / 1000);
+      const expiredToken = mintMockJwt(
+        { sub: 'expired-user', iat: now - 3600, exp: now - 100 },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      assert.throws(
+        () => verifyJwt(expiredToken, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_TOKEN_EXPIRED'
+      );
+    });
+
+    it('accepts expired token if within clockTolerance / leeway window', () => {
+      const now = Math.floor(Date.now() / 1000);
+      const expiredToken = mintMockJwt(
+        { sub: 'borderline-user', iat: now - 3600, exp: now - 10 },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      const verified = verifyJwt(expiredToken, DEFAULT_SECRET, {
+        clockTolerance: 15,
+      });
+      assert.strictEqual(verified.valid, true);
+    });
+
+    it('rejects expired token when outside clockTolerance / leeway window', () => {
+      const now = Math.floor(Date.now() / 1000);
+      const expiredToken = mintMockJwt(
+        { sub: 'borderline-user', iat: now - 3600, exp: now - 20 },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      assert.throws(
+        () => verifyJwt(expiredToken, DEFAULT_SECRET, { clockTolerance: 10 }),
+        (err) => err instanceof JwtError && err.code === 'ERR_TOKEN_EXPIRED'
+      );
+    });
+
+    it('allows expired token when ignoreExpiration: true is specified', () => {
+      const now = Math.floor(Date.now() / 1000);
+      const expiredToken = mintMockJwt(
+        { sub: 'ignored-user', exp: now - 5000 },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      const verified = verifyJwt(expiredToken, DEFAULT_SECRET, {
+        ignoreExpiration: true,
+      });
+      assert.strictEqual(verified.valid, true);
+    });
+
+    it('rejects token with future not-before (nbf) claim', () => {
+      const now = Math.floor(Date.now() / 1000);
+      const futureToken = mintMockJwt(
+        { sub: 'future-user', nbf: now + 300 },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      assert.throws(
+        () => verifyJwt(futureToken, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('enforces exact expiration boundary with zero tolerance (RFC 7519 Section 4.1.4)', () => {
+      const exp = 1700000000;
+      const token = mintMockJwt(
+        { sub: 'boundary-user-zero-tolerance', exp },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      assert.throws(
+        () => verifyJwt(token, DEFAULT_SECRET, { currentTime: 1700000000, clockTolerance: 0 }),
+        (err) => err instanceof JwtError && err.code === 'ERR_TOKEN_EXPIRED'
+      );
+
+      const verified = verifyJwt(token, DEFAULT_SECRET, { currentTime: 1699999999, clockTolerance: 0 });
+      assert.strictEqual(verified.valid, true);
+    });
+
+    it('enforces exact expiration boundary with clockTolerance / leeway', () => {
+      const exp = 1700000000;
+      const token = mintMockJwt(
+        { sub: 'boundary-user-leeway', exp },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      assert.throws(
+        () => verifyJwt(token, DEFAULT_SECRET, { currentTime: 1700000010, clockTolerance: 10 }),
+        (err) => err instanceof JwtError && err.code === 'ERR_TOKEN_EXPIRED'
+      );
+
+      const verified = verifyJwt(token, DEFAULT_SECRET, { currentTime: 1700000009, clockTolerance: 10 });
+      assert.strictEqual(verified.valid, true);
+    });
+  });
+
+  describe('Issuer (iss) & Audience (aud) Verification', () => {
+    it('verifies matching issuer and audience successfully', () => {
+      const token = mintMockJwt({ sub: 'user-aud' }, DEFAULT_SECRET, 'HS256', {
+        issuer: 'authz-gatekeeper-auth',
+        audience: 'https://api.example.com',
+      });
+
+      const verified = verifyJwt(token, DEFAULT_SECRET, {
+        issuer: 'authz-gatekeeper-auth',
+        audience: 'https://api.example.com',
+      });
+      assert.strictEqual(verified.valid, true);
+      assert.strictEqual(verified.payload.iss, 'authz-gatekeeper-auth');
+      assert.strictEqual(verified.payload.aud, 'https://api.example.com');
+    });
+
+    it('throws ERR_INVALID_TOKEN on issuer mismatch', () => {
+      const token = mintMockJwt({ sub: 'user-aud' }, DEFAULT_SECRET, 'HS256', {
+        issuer: 'authz-gatekeeper-auth',
+      });
+
+      assert.throws(
+        () => verifyJwt(token, DEFAULT_SECRET, { issuer: 'unexpected-auth-issuer' }),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('supports issuer validation against an array of allowed issuers', () => {
+      const token = mintMockJwt({ sub: 'user-iss' }, DEFAULT_SECRET, 'HS256', {
+        issuer: 'issuer-beta',
+      });
+
+      const verified = verifyJwt(token, DEFAULT_SECRET, {
+        issuer: ['issuer-alpha', 'issuer-beta'],
+      });
+      assert.strictEqual(verified.valid, true);
+
+      assert.throws(
+        () => verifyJwt(token, DEFAULT_SECRET, { issuer: ['issuer-charlie', 'issuer-delta'] }),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('verifies audience when token aud is an array of audiences', () => {
+      const token = mintMockJwt(
+        { sub: 'user-aud', aud: ['api://billing', 'api://users'] },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+
+      const verified = verifyJwt(token, DEFAULT_SECRET, {
+        audience: 'api://users',
+      });
+      assert.strictEqual(verified.valid, true);
+
+      assert.throws(
+        () => verifyJwt(token, DEFAULT_SECRET, { audience: 'api://unknown' }),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+  });
+
+  describe('decodeJwt (Signature-less inspection)', () => {
+    it('decodes header, payload, and signature without requiring secret or key', () => {
+      const token = mintMockJwt(
+        { sub: 'decode-user', role: 'Member' },
+        DEFAULT_SECRET,
+        'HS256',
+        { header: { customHeader: 'xyz' } }
+      );
+
+      const decoded = decodeJwt(token);
+      assert.strictEqual(decoded.header.alg, 'HS256');
+      assert.strictEqual(decoded.header.customHeader, 'xyz');
+      assert.strictEqual(decoded.payload.sub, 'decode-user');
+      assert.strictEqual(decoded.payload.role, 'Member');
+      assert.ok(typeof decoded.signature === 'string');
+    });
+
+    it('decodes expired or invalid-signature tokens without error', () => {
+      const token = mintMockJwt({ sub: 'expired', exp: 1 }, DEFAULT_SECRET, 'HS256');
+      const decoded = decodeJwt(token);
+      assert.strictEqual(decoded.payload.sub, 'expired');
+    });
+
+    it('throws ERR_INVALID_TOKEN if token is malformed', () => {
+      assert.throws(
+        () => decodeJwt('header.only-two-parts'),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(''),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('rejects tokens with padded header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'decode-padded' }, DEFAULT_SECRET, 'HS256');
+      const [h, p, s] = token.split('.');
+
+      assert.throws(
+        () => decodeJwt(`${h}=.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}==.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}=.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}==.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${s}=`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${s}==`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('rejects tokens with + or / in header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'decode-std-b64' }, DEFAULT_SECRET, 'HS256');
+      const [h, p, s] = token.split('.');
+
+      assert.throws(
+        () => decodeJwt(`${h}+.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}/.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}+.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}/.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${s}+`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${s}/`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('rejects tokens with non-canonical base64url encoding in header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'decode-canon' }, DEFAULT_SECRET, 'HS256', {
+        header: { kid: 'key-decode-1' },
+      });
+      const [h, p, s] = token.split('.');
+
+      function findNonCanonical(segment) {
+        for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_') {
+          const candidate = segment.slice(0, -1) + c;
+          if (candidate !== segment) {
+            const buf = Buffer.from(candidate, 'base64url');
+            if (buf.toString('base64url') === segment) {
+              return candidate;
+            }
+          }
+        }
+        return segment + 'A';
+      }
+
+      const nonCanonH = findNonCanonical(h);
+      const nonCanonP = findNonCanonical(p);
+      const nonCanonS = findNonCanonical(s);
+
+      assert.throws(
+        () => decodeJwt(`${nonCanonH}.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${nonCanonP}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${nonCanonS}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('legitimate canonically-encoded tokens continue to decode cleanly', () => {
+      const token = mintMockJwt(
+        { sub: 'legit-decode-user', role: 'Editor' },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+      const decoded = decodeJwt(token);
+      assert.strictEqual(decoded.header.alg, 'HS256');
+      assert.strictEqual(decoded.payload.sub, 'legit-decode-user');
+      assert.strictEqual(decoded.payload.role, 'Editor');
+      assert.strictEqual(decoded.signature, token.split('.')[2]);
+    });
+  });
+
+  describe('synthesizePersonaJwt - Matrix Personas & Claims Synthesis', () => {
+    it('returns null for anonymous persona or null input', () => {
+      assert.strictEqual(synthesizePersonaJwt(null, {}, DEFAULT_SECRET), null);
+      assert.strictEqual(synthesizePersonaJwt(undefined, {}, DEFAULT_SECRET), null);
+
+      const anonymousPersona = {
+        role: null,
+        tenantId: null,
+        userId: null,
+        isAnonymous: true,
+      };
+      assert.strictEqual(synthesizePersonaJwt(anonymousPersona, {}, DEFAULT_SECRET), null);
+    });
+
+    it('synthesizes valid token for INTRA_TENANT_ALLOW persona', () => {
+      const allowPersona = {
+        role: 'OrgAdmin',
+        tenantId: 'tenant-alpha',
+        userId: 'user-tenant-alpha-orgadmin',
+        isAnonymous: false,
+      };
+
+      const jwtConfig = {
+        role_claim: 'role',
+        tenant_claim: 'tenant_id',
+        user_id_claim: 'sub',
+        algorithm: 'HS256',
+        issuer: 'gatekeeper-ci',
+        audience: 'gatekeeper-target',
+      };
+
+      const token = synthesizePersonaJwt(allowPersona, jwtConfig, DEFAULT_SECRET);
+      assert.ok(typeof token === 'string');
+
+      const verified = verifyJwt(token, DEFAULT_SECRET, {
+        issuer: 'gatekeeper-ci',
+        audience: 'gatekeeper-target',
+      });
+      assert.strictEqual(verified.valid, true);
+      assert.strictEqual(verified.payload.role, 'OrgAdmin');
+      assert.strictEqual(verified.payload.tenant_id, 'tenant-alpha');
+      assert.strictEqual(verified.payload.sub, 'user-tenant-alpha-orgadmin');
+    });
+
+    it('synthesizes valid token for INTRA_TENANT_DENY persona', () => {
+      const denyPersona = {
+        role: 'Viewer',
+        tenantId: 'tenant-alpha',
+        userId: 'user-tenant-alpha-viewer',
+        isAnonymous: false,
+      };
+
+      const token = synthesizePersonaJwt(denyPersona, { role_claim: 'role' }, DEFAULT_SECRET);
+      const verified = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verified.valid, true);
+      assert.strictEqual(verified.payload.role, 'Viewer');
+      assert.strictEqual(verified.payload.tenant_id, 'tenant-alpha');
+      assert.strictEqual(verified.payload.sub, 'user-tenant-alpha-viewer');
+    });
+
+    it('synthesizes valid token for CROSS_TENANT_ATTACK persona with secondary tenant context', () => {
+      const attackerPersona = {
+        role: 'OrgAdmin',
+        tenantId: 'tenant-beta',
+        userId: 'attacker-tenant-beta-orgadmin',
+        isAnonymous: false,
+      };
+
+      const token = synthesizePersonaJwt(attackerPersona, { role_claim: 'role' }, DEFAULT_SECRET);
+      const verified = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verified.valid, true);
+      assert.strictEqual(verified.payload.role, 'OrgAdmin');
+      assert.strictEqual(verified.payload.tenant_id, 'tenant-beta');
+      assert.strictEqual(verified.payload.sub, 'attacker-tenant-beta-orgadmin');
+    });
+
+    it('formats plural role claim (roles) as an array by default', () => {
+      const persona = { role: 'Member', tenantId: 'tenant-alpha', userId: 'user-1', isAnonymous: false };
+      const token = synthesizePersonaJwt(persona, { role_claim: 'roles' }, DEFAULT_SECRET);
+      const decoded = decodeJwt(token);
+      assert.deepStrictEqual(decoded.payload.roles, ['Member']);
+    });
+
+    it('formats groups and permissions plural claims as arrays', () => {
+      const persona = { role: 'Auditor', tenantId: 'tenant-1', userId: 'user-1', isAnonymous: false };
+      const tokenGroups = synthesizePersonaJwt(persona, { role_claim: 'groups' }, DEFAULT_SECRET);
+      assert.deepStrictEqual(decodeJwt(tokenGroups).payload.groups, ['Auditor']);
+
+      const tokenPerms = synthesizePersonaJwt(persona, { role_claim: 'permissions' }, DEFAULT_SECRET);
+      assert.deepStrictEqual(decodeJwt(tokenPerms).payload.permissions, ['Auditor']);
+    });
+
+    it('supports dot-notation nested role claims (e.g. realm_access.roles)', () => {
+      const persona = { role: 'Member', tenantId: 'tenant-1', userId: 'user-1', isAnonymous: false };
+      const token = synthesizePersonaJwt(
+        persona,
+        { role_claim: 'realm_access.roles', tenant_claim: 'custom.org_id', user_id_claim: 'identity.uid' },
+        DEFAULT_SECRET
+      );
+
+      const decoded = decodeJwt(token);
+      assert.deepStrictEqual(decoded.payload.realm_access, { roles: ['Member'] });
+      assert.strictEqual(decoded.payload.custom.org_id, 'tenant-1');
+      assert.strictEqual(decoded.payload.identity.uid, 'user-1');
+    });
+
+    it('supports options.asArray: true forcing array format even for singular claim name', () => {
+      const persona = { role: 'Member', tenantId: 'tenant-1', userId: 'user-1', isAnonymous: false };
+      const token = synthesizePersonaJwt(
+        persona,
+        { role_claim: 'role' },
+        DEFAULT_SECRET,
+        { asArray: true }
+      );
+      const decoded = decodeJwt(token);
+      assert.deepStrictEqual(decoded.payload.role, ['Member']);
+    });
+
+    it('synthesizes token using AuthPolicy instance directly', () => {
+      const policy = new AuthPolicy({
+        version: '1',
+        roles: ['SuperAdmin', 'OrgAdmin'],
+        adjacencyList: new Map([['SuperAdmin', ['OrgAdmin']], ['OrgAdmin', []]]),
+        transitiveRoles: new Map([['SuperAdmin', new Set(['SuperAdmin', 'OrgAdmin'])], ['OrgAdmin', new Set(['OrgAdmin'])]]),
+        authorizedCallers: new Map([['OrgAdmin', new Set(['SuperAdmin', 'OrgAdmin'])], ['SuperAdmin', new Set(['SuperAdmin'])]]),
+        jwt: {
+          algorithm: 'HS256',
+          role_claim: 'role',
+          tenant_claim: 'org_id',
+          user_id_claim: 'sub',
+          issuer: 'policy-issuer',
+        },
+      });
+
+      const persona = { role: 'SuperAdmin', tenantId: 'corp-1', userId: 'usr-9', isAnonymous: false };
+      const token = synthesizePersonaJwt(persona, policy, DEFAULT_SECRET);
+      const verified = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verified.payload.role, 'SuperAdmin');
+      assert.strictEqual(verified.payload.org_id, 'corp-1');
+      assert.strictEqual(verified.payload.iss, 'policy-issuer');
+    });
+
+    it('synthesizes token using asymmetric RSA keypair', () => {
+      const keyPair = generateKeyPair('RS256');
+      const persona = { role: 'SuperAdmin', tenantId: 't-1', userId: 'u-1', isAnonymous: false };
+      const token = synthesizePersonaJwt(
+        persona,
+        { algorithm: 'RS256', role_claim: 'role' },
+        keyPair.privateKey
+      );
+
+      const verified = verifyJwt(token, keyPair.publicKey);
+      assert.strictEqual(verified.header.alg, 'RS256');
+      assert.strictEqual(verified.payload.role, 'SuperAdmin');
+    });
+
+    it('defaults role_claim to "role" when jwtConfig is omitted or empty, maintaining parity with AuthPolicy', () => {
+      const persona = {
+        role: 'OrgAdmin',
+        tenantId: 'tenant-parity',
+        userId: 'user-parity-1',
+        isAnonymous: false,
+      };
+
+      // 1. Defaults role_claim to 'role' when omitted (undefined)
+      const tokenOmitted = synthesizePersonaJwt(persona, undefined, DEFAULT_SECRET);
+      const decodedOmitted = decodeJwt(tokenOmitted);
+      assert.strictEqual(decodedOmitted.payload.role, 'OrgAdmin');
+      assert.strictEqual(typeof decodedOmitted.payload.role, 'string');
+      assert.strictEqual(decodedOmitted.payload.roles, undefined);
+
+      // 2. Defaults role_claim to 'role' when empty object ({})
+      const tokenEmpty = synthesizePersonaJwt(persona, {}, DEFAULT_SECRET);
+      const decodedEmpty = decodeJwt(tokenEmpty);
+      assert.strictEqual(decodedEmpty.payload.role, 'OrgAdmin');
+      assert.strictEqual(typeof decodedEmpty.payload.role, 'string');
+      assert.strictEqual(decodedEmpty.payload.roles, undefined);
+
+      // 3. Token parity: Calling with {} produces exact same payload claims as calling with default AuthPolicy
+      const defaultPolicy = new AuthPolicy({ version: '1', roles: ['OrgAdmin'] });
+      const tokenPolicy = synthesizePersonaJwt(persona, defaultPolicy, DEFAULT_SECRET);
+      const decodedPolicy = decodeJwt(tokenPolicy);
+
+      assert.strictEqual(decodedEmpty.payload.role, decodedPolicy.payload.role);
+      assert.strictEqual(decodedEmpty.payload.roles, decodedPolicy.payload.roles);
+      assert.strictEqual(decodedEmpty.payload.tenant_id, decodedPolicy.payload.tenant_id);
+      assert.strictEqual(decodedEmpty.payload.sub, decodedPolicy.payload.sub);
+
+      const { jti: _jtiEmpty, iat: _iatEmpty, exp: _expEmpty, ...claimsEmpty } = decodedEmpty.payload;
+      const { jti: _jtiPolicy, iat: _iatPolicy, exp: _expPolicy, ...claimsPolicy } = decodedPolicy.payload;
+      assert.deepStrictEqual(claimsEmpty, claimsPolicy);
+      assert.deepStrictEqual(Object.keys(decodedEmpty.payload).sort(), Object.keys(decodedPolicy.payload).sort());
+
+      // Parity with deterministic claims
+      const fixedClaims = { iat: 1700000000, exp: 1700003600, jti: 'fixed-jti-parity' };
+      const tokenEmptyFixed = synthesizePersonaJwt(persona, {}, DEFAULT_SECRET, { claims: fixedClaims });
+      const tokenPolicyFixed = synthesizePersonaJwt(persona, defaultPolicy, DEFAULT_SECRET, { claims: fixedClaims });
+      assert.deepStrictEqual(decodeJwt(tokenEmptyFixed).payload, decodeJwt(tokenPolicyFixed).payload);
+    });
+  });
+
+  describe('Error Conditions', () => {
+    it('throws ERR_UNSUPPORTED_ALGORITHM when minting with unsupported algorithm', () => {
+      assert.throws(
+        () => mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'none'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+      assert.throws(
+        () => mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS128'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+
+    it('throws ERR_INVALID_INPUT if mintMockJwt has no secret or private key', () => {
+      assert.throws(
+        () => mintMockJwt({ sub: 'user-1' }, null, 'HS256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+
+    it('throws ERR_INVALID_INPUT if custom header specifies conflicting alg', () => {
+      assert.throws(
+        () => mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256', { header: { alg: 'RS256' } }),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+      assert.throws(
+        () => mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256', { headers: { alg: 'ES256' } }),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+
+    it('succeeds and normalizes alg if custom header alg matches case-insensitively', () => {
+      const token = mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256', { header: { alg: 'hs256' } });
+      const decoded = decodeJwt(token);
+      assert.strictEqual(decoded.header.alg, 'HS256');
+      const verified = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verified.header.alg, 'HS256');
+    });
+
+    it('preserves non-conflicting custom headers alongside authoritative alg', () => {
+      const token = mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256', {
+        header: { kid: 'my-key-id', cty: 'application/json' },
+      });
+      const decoded = decodeJwt(token);
+      assert.strictEqual(decoded.header.kid, 'my-key-id');
+      assert.strictEqual(decoded.header.cty, 'application/json');
+      assert.strictEqual(decoded.header.alg, 'HS256');
+      const verified = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verified.header.kid, 'my-key-id');
+      assert.strictEqual(verified.header.cty, 'application/json');
+      assert.strictEqual(verified.header.alg, 'HS256');
+    });
+
+    it('throws ERR_INVALID_INPUT if verifyJwt has no secret or public key', () => {
+      const token = mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256');
+      assert.throws(
+        () => verifyJwt(token, null),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+
+    it('throws ERR_UNSUPPORTED_ALGORITHM if algorithm is restricted by options.algorithms', () => {
+      const token = mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256');
+      assert.throws(
+        () => verifyJwt(token, DEFAULT_SECRET, { algorithms: ['RS256'] }),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+
+    it('throws ERR_INVALID_TOKEN if token has fewer or more than 3 segments', () => {
+      assert.throws(
+        () => verifyJwt('only.two', DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt('one.two.three.four', DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+  });
+
+  describe('detectKeyType Utility', () => {
+    it('identifies RSA public and private key PEM strings', () => {
+      const keyPair = generateKeyPair('RS256');
+      const pubInfo = detectKeyType(keyPair.publicKey);
+      assert.strictEqual(pubInfo.type, 'public');
+      assert.strictEqual(pubInfo.asymmetricKeyType, 'rsa');
+
+      const privInfo = detectKeyType(keyPair.privateKey);
+      assert.strictEqual(privInfo.type, 'private');
+      assert.strictEqual(privInfo.asymmetricKeyType, 'rsa');
+    });
+
+    it('identifies EC public and private key PEM strings', () => {
+      const keyPair = generateKeyPair('ES256');
+      const pubInfo = detectKeyType(keyPair.publicKey);
+      assert.strictEqual(pubInfo.type, 'public');
+      assert.strictEqual(pubInfo.asymmetricKeyType, 'ec');
+      assert.strictEqual(pubInfo.namedCurve, 'prime256v1');
+      assert.deepStrictEqual(pubInfo.asymmetricKeyDetails, { namedCurve: 'prime256v1' });
+
+      const privInfo = detectKeyType(keyPair.privateKey);
+      assert.strictEqual(privInfo.type, 'private');
+      assert.strictEqual(privInfo.asymmetricKeyType, 'ec');
+      assert.strictEqual(privInfo.namedCurve, 'prime256v1');
+      assert.deepStrictEqual(privInfo.asymmetricKeyDetails, { namedCurve: 'prime256v1' });
+    });
+
+    it('returns namedCurve: "prime256v1" for P-256 keys and "secp384r1" for P-384 keys', () => {
+      const p256KeyPair = generateKeyPair('ES256');
+      assert.strictEqual(detectKeyType(p256KeyPair.publicKey).namedCurve, 'prime256v1');
+      assert.strictEqual(detectKeyType(p256KeyPair.privateKey).namedCurve, 'prime256v1');
+
+      const p384KeyPair = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'secp384r1',
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      });
+      assert.strictEqual(detectKeyType(p384KeyPair.publicKey).namedCurve, 'secp384r1');
+      assert.strictEqual(detectKeyType(p384KeyPair.privateKey).namedCurve, 'secp384r1');
+
+      const p384KeyObjects = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+      assert.strictEqual(detectKeyType(p384KeyObjects.publicKey).namedCurve, 'secp384r1');
+      assert.strictEqual(detectKeyType(p384KeyObjects.privateKey).namedCurve, 'secp384r1');
+    });
+
+    it('identifies crypto.KeyObject instances', () => {
+      const keyPair = generateKeyPair('RS256');
+      const pubKeyObj = crypto.createPublicKey(keyPair.publicKey);
+      const privKeyObj = crypto.createPrivateKey(keyPair.privateKey);
+      const secretKeyObj = crypto.createSecretKey(Buffer.from('test-secret'));
+
+      assert.deepStrictEqual(detectKeyType(pubKeyObj), {
+        type: 'public',
+        asymmetricKeyType: 'rsa',
+        asymmetricKeyDetails: pubKeyObj.asymmetricKeyDetails,
+        namedCurve: null,
+      });
+      assert.deepStrictEqual(detectKeyType(privKeyObj), {
+        type: 'private',
+        asymmetricKeyType: 'rsa',
+        asymmetricKeyDetails: privKeyObj.asymmetricKeyDetails,
+        namedCurve: null,
+      });
+      assert.deepStrictEqual(detectKeyType(secretKeyObj), {
+        type: 'secret',
+        asymmetricKeyType: null,
+        asymmetricKeyDetails: null,
+        namedCurve: null,
+      });
+    });
+
+    it('classifies raw string and Buffer secrets as symmetric secrets', () => {
+      assert.deepStrictEqual(detectKeyType('my-hmac-shared-secret'), {
+        type: 'secret',
+        asymmetricKeyType: null,
+        asymmetricKeyDetails: null,
+        namedCurve: null,
+      });
+      assert.deepStrictEqual(detectKeyType(Buffer.from('my-hmac-shared-secret')), {
+        type: 'secret',
+        asymmetricKeyType: null,
+        asymmetricKeyDetails: null,
+        namedCurve: null,
+      });
+    });
+
+    it('throws ERR_INVALID_INPUT when PEM string header is present but malformed', () => {
+      assert.throws(
+        () => detectKeyType('-----BEGIN PUBLIC KEY-----\nNOT_VALID_BASE64!!!\n-----END PUBLIC KEY-----'),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+  });
+
+  describe('mintMockJwt Key Compatibility Enforcement', () => {
+    it('throws ERR_UNSUPPORTED_ALGORITHM when minting RS256 with symmetric secret', () => {
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, DEFAULT_SECRET, 'RS256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+
+    it('throws ERR_INVALID_INPUT when minting RS256 with RSA public key', () => {
+      const rsaKeyPair = generateKeyPair('RS256');
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, rsaKeyPair.publicKey, 'RS256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+
+    it('throws ERR_UNSUPPORTED_ALGORITHM when minting ES256 with symmetric secret', () => {
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, DEFAULT_SECRET, 'ES256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+
+    it('throws ERR_INVALID_INPUT when minting ES256 with EC public key', () => {
+      const ecKeyPair = generateKeyPair('ES256');
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, ecKeyPair.publicKey, 'ES256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+
+    it('throws ERR_UNSUPPORTED_ALGORITHM when minting ES256 with non-P-256 EC key (P-384 / secp384r1)', () => {
+      const p384KeyPair = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'secp384r1',
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      });
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, p384KeyPair.privateKey, 'ES256'),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.strictEqual(
+            err.message,
+            'Algorithm ES256 requires curve P-256 (prime256v1), but received curve "secp384r1"'
+          );
+          return true;
+        }
+      );
+
+      const p384KeyObjects = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, p384KeyObjects.privateKey, 'ES256'),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.strictEqual(
+            err.message,
+            'Algorithm ES256 requires curve P-256 (prime256v1), but received curve "secp384r1"'
+          );
+          return true;
+        }
+      );
+    });
+
+    it('throws ERR_UNSUPPORTED_ALGORITHM when minting HS256 with asymmetric key', () => {
+      const rsaKeyPair = generateKeyPair('RS256');
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, rsaKeyPair.privateKey, 'HS256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, rsaKeyPair.publicKey, 'HS256'),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+  });
+
+  describe('Algorithm Confusion / Key Confusion Attack Prevention', () => {
+    it('prevents RS256-to-HS256 confusion attack when attacker signs with RSA public key', () => {
+      const keyPair = generateKeyPair('RS256');
+
+      // Attacker creates an HS256 token using the RSA publicKey PEM string as the HMAC secret
+      const headerB64 = base64UrlEncode({ typ: 'JWT', alg: 'HS256' });
+      const payloadB64 = base64UrlEncode({
+        sub: 'forged-admin',
+        role: 'SuperAdmin',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+      const signingInput = headerB64 + '.' + payloadB64;
+      const signatureB64 = crypto
+        .createHmac('sha256', keyPair.publicKey)
+        .update(signingInput)
+        .digest()
+        .toString('base64url');
+      const attackerToken = signingInput + '.' + signatureB64;
+
+      assert.throws(
+        () => verifyJwt(attackerToken, keyPair.publicKey),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.match(err.message, /algorithm confusion attack detected/i);
+          return true;
+        }
+      );
+    });
+
+    it('prevents ES256-to-HS256 confusion attack when attacker signs with EC public key', () => {
+      const keyPair = generateKeyPair('ES256');
+
+      // Attacker creates an HS256 token using the EC publicKey PEM string as the HMAC secret
+      const headerB64 = base64UrlEncode({ typ: 'JWT', alg: 'HS256' });
+      const payloadB64 = base64UrlEncode({
+        sub: 'forged-admin',
+        role: 'SuperAdmin',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+      const signingInput = headerB64 + '.' + payloadB64;
+      const signatureB64 = crypto
+        .createHmac('sha256', keyPair.publicKey)
+        .update(signingInput)
+        .digest()
+        .toString('base64url');
+      const attackerToken = signingInput + '.' + signatureB64;
+
+      assert.throws(
+        () => verifyJwt(attackerToken, keyPair.publicKey),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.match(err.message, /algorithm confusion attack detected/i);
+          return true;
+        }
+      );
+    });
+
+    it('prevents asymmetric algorithm verification against symmetric secret', () => {
+      // Attacker sends an RS256 token verified against a symmetric string secret
+      const rsaKeyPair = generateKeyPair('RS256');
+      const rsaToken = mintMockJwt({ sub: 'user-rsa' }, rsaKeyPair.privateKey, 'RS256');
+
+      assert.throws(
+        () => verifyJwt(rsaToken, DEFAULT_SECRET),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.match(err.message, /algorithm confusion attack detected/i);
+          return true;
+        }
+      );
+
+      // Attacker sends an ES256 token verified against a symmetric string secret
+      const ecKeyPair = generateKeyPair('ES256');
+      const ecToken = mintMockJwt({ sub: 'user-ec' }, ecKeyPair.privateKey, 'ES256');
+
+      assert.throws(
+        () => verifyJwt(ecToken, DEFAULT_SECRET),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.match(err.message, /algorithm confusion attack detected/i);
+          return true;
+        }
+      );
+    });
+
+    it('valid verification still succeeds for legitimate tokens', () => {
+      // RSA tokens with RSA public key succeed
+      const rsaKeyPair = generateKeyPair('RS256');
+      const rsaToken = mintMockJwt({ sub: 'rsa-user', role: 'SuperAdmin' }, rsaKeyPair.privateKey, 'RS256');
+      const rsaVerified = verifyJwt(rsaToken, rsaKeyPair.publicKey);
+      assert.strictEqual(rsaVerified.valid, true);
+      assert.strictEqual(rsaVerified.payload.sub, 'rsa-user');
+      assert.strictEqual(rsaVerified.payload.role, 'SuperAdmin');
+
+      // EC tokens with EC public key succeed
+      const ecKeyPair = generateKeyPair('ES256');
+      const ecToken = mintMockJwt({ sub: 'ec-user', tenant_id: 'tenant-omega' }, ecKeyPair.privateKey, 'ES256');
+      const ecVerified = verifyJwt(ecToken, ecKeyPair.publicKey);
+      assert.strictEqual(ecVerified.valid, true);
+      assert.strictEqual(ecVerified.payload.sub, 'ec-user');
+      assert.strictEqual(ecVerified.payload.tenant_id, 'tenant-omega');
+
+      // HMAC tokens with symmetric secret succeed
+      const hmacToken = mintMockJwt({ sub: 'hmac-user', role: 'Viewer' }, DEFAULT_SECRET, 'HS256');
+      const hmacVerified = verifyJwt(hmacToken, DEFAULT_SECRET);
+      assert.strictEqual(hmacVerified.valid, true);
+      assert.strictEqual(hmacVerified.payload.sub, 'hmac-user');
+      assert.strictEqual(hmacVerified.payload.role, 'Viewer');
+
+      // Explicit options.algorithms: ['RS256'] works
+      const rsaExplicit = verifyJwt(rsaToken, rsaKeyPair.publicKey, {
+        algorithms: ['RS256'],
+      });
+      assert.strictEqual(rsaExplicit.valid, true);
+
+      // Explicit options.algorithm: 'RS256' works
+      const rsaSingleAlg = verifyJwt(rsaToken, rsaKeyPair.publicKey, {
+        algorithm: 'RS256',
+      });
+      assert.strictEqual(rsaSingleAlg.valid, true);
+    });
+
+    it('rejects ES256 token verification with non-P-256 EC key (P-384 / secp384r1)', () => {
+      const p256KeyPair = generateKeyPair('ES256');
+      const validEs256Token = mintMockJwt({ sub: 'admin' }, p256KeyPair.privateKey, 'ES256');
+
+      const p384KeyPair = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'secp384r1',
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      });
+
+      assert.throws(
+        () => verifyJwt(validEs256Token, p384KeyPair.publicKey),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.strictEqual(
+            err.message,
+            'Algorithm ES256 requires curve P-256 (prime256v1), but received curve "secp384r1"'
+          );
+          return true;
+        }
+      );
+
+      const p384KeyObjects = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+      assert.throws(
+        () => verifyJwt(validEs256Token, p384KeyObjects.publicKey),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.strictEqual(
+            err.message,
+            'Algorithm ES256 requires curve P-256 (prime256v1), but received curve "secp384r1"'
+          );
+          return true;
+        }
+      );
+    });
+
+    it('ensures legitimate P-256 keys (prime256v1) continue to mint and verify cleanly across formats', () => {
+      const p256KeyPair = generateKeyPair('ES256');
+      const tokenPem = mintMockJwt({ sub: 'legit-ec-user', role: 'SecAdmin' }, p256KeyPair.privateKey, 'ES256');
+      const verifiedPem = verifyJwt(tokenPem, p256KeyPair.publicKey);
+      assert.strictEqual(verifiedPem.valid, true);
+      assert.strictEqual(verifiedPem.header.alg, 'ES256');
+      assert.strictEqual(verifiedPem.payload.sub, 'legit-ec-user');
+      assert.strictEqual(verifiedPem.payload.role, 'SecAdmin');
+
+      const p256KeyObjects = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+      const tokenObj = mintMockJwt({ sub: 'legit-obj-user', role: 'SecAdmin' }, p256KeyObjects.privateKey, 'ES256');
+      const verifiedObj = verifyJwt(tokenObj, p256KeyObjects.publicKey);
+      assert.strictEqual(verifiedObj.valid, true);
+      assert.strictEqual(verifiedObj.header.alg, 'ES256');
+      assert.strictEqual(verifiedObj.payload.sub, 'legit-obj-user');
+    });
+
+    it('enforces caller-supplied options.algorithm restriction on mismatch', () => {
+      const hmacToken = mintMockJwt({ sub: 'user-hmac' }, DEFAULT_SECRET, 'HS256');
+      assert.throws(
+        () => verifyJwt(hmacToken, DEFAULT_SECRET, { algorithm: 'HS384' }),
+        (err) => err instanceof JwtError && err.code === 'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    });
+  });
+});
