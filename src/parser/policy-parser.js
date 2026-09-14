@@ -541,7 +541,7 @@ export function parseAuthPolicy(content) {
   const { transitiveRoles, authorizedCallers } = computeTransitiveRoles(adjacencyList);
 
   // 5. Validate Defaults
-  const defaults = doc.defaults || {};
+  const defaults = doc.defaults ?? {};
   if (typeof defaults !== 'object' || Array.isArray(defaults)) {
     throw new PolicyValidationError("Property 'defaults' must be an object.");
   }
