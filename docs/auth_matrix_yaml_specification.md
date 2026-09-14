@@ -13,7 +13,7 @@ This specification defines the syntax, schema requirements, and resolution seman
    - **Layer 2**: Exact route rules in `auth-matrix.yaml` (`/api/v1/admin/audit`).
    - **Layer 3**: Glob/wildcard path pattern rules in `auth-matrix.yaml` (`/api/v1/admin/*`).
    - **Layer 4**: Method-level defaults (`GET: Viewer`, `DELETE: OrgAdmin`).
-   - **Layer 5 (Baseline)**: Global zero-trust fallback (deny unmapped protected routes).
+   - **Layer 5 (Baseline)**: Apply `defaults.default_role`; if absent, `defaults.unauthenticated_access` controls allow/deny (default: `deny`).
 4. **Deterministic Validation**: Strict cycle detection preventing recursive inheritance; explicit validation of unknown parent roles.
 
 ---
