@@ -26,6 +26,17 @@ export class PolicySyntaxError extends PolicyValidationError {
 }
 
 /**
+ * Escapes regex special characters in a literal string fragment, while expanding
+ * inline wildcard asterisks (*) into single-segment non-slash matchers ([^/]*).
+ * 
+ * @param {string} str - Raw string fragment
+ * @returns {string} Escaped regex string
+ */
+function escapeRegexFragment(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '[^/]*');
+}
+
+/**
  * Compiles a path pattern (supporting `{param}`, `*`, and `**`) into a regular expression.
  * 
  * @param {string} pattern - Path pattern (e.g. "/api/v1/{tenant_id}/admin/*")
@@ -58,10 +69,15 @@ export function compilePathPattern(pattern) {
         literalSegmentCount++;
         literalCharCount += literalPart.length;
       }
-      let escaped = seg.replace(/[.*+?^$|[\]\\]/g, '\\$&');
-      escaped = escaped.replace(/\{[^{}]+\}/g, '[^/]+');
-      escaped = escaped.replace(/\\\*/g, '[^/]*');
-      return escaped;
+      const parts = seg.split(/(\{[^{}]+\})/g);
+      return parts
+        .map((part) => {
+          if (/^\{[^{}]+\}$/.test(part)) {
+            return '[^/]+';
+          }
+          return escapeRegexFragment(part);
+        })
+        .join('');
     }
 
     if (seg.length > 0) {
@@ -69,11 +85,7 @@ export function compilePathPattern(pattern) {
       literalCharCount += seg.length;
     }
 
-    // Escape regex characters
-    let escaped = seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Replace inline wildcards if any (e.g. "prefix-*")
-    escaped = escaped.replace(/\\\*/g, '[^/]*');
-    return escaped;
+    return escapeRegexFragment(seg);
   });
 
   const hasParams = paramCount > 0;

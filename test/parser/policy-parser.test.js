@@ -185,6 +185,30 @@ routes:
       assert.ok(inline123);
       assert.equal(inline123.path, '/items-{id}');
       assert.deepEqual(inline123.roles, ['Member']);
+
+      // 5. Special regex characters in segments with parameters (e.g. /items/({id}))
+      const specialCharParamPolicy = parseAuthPolicy(`
+version: "1"
+roles:
+  - Admin
+  - Member
+routes:
+  - path: "/items/({id})"
+    roles: [Admin]
+  - path: "/items/{id}"
+    roles: [Member]
+`);
+      // /items/(123) should match /items/({id})
+      const parenMatch = specialCharParamPolicy.findMatchingRouteRule('/items/(123)', 'GET');
+      assert.ok(parenMatch);
+      assert.equal(parenMatch.path, '/items/({id})');
+      assert.deepEqual(parenMatch.roles, ['Admin']);
+
+      // /items/123 should NOT match /items/({id}), but should match /items/{id}
+      const plainMatch = specialCharParamPolicy.findMatchingRouteRule('/items/123', 'GET');
+      assert.ok(plainMatch);
+      assert.equal(plainMatch.path, '/items/{id}');
+      assert.deepEqual(plainMatch.roles, ['Member']);
     });
   });
 
