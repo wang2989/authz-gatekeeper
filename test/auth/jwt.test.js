@@ -106,6 +106,81 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
         code: 'ERR_INVALID_TOKEN',
       });
     });
+
+    it('rejects base64url strings containing padding (=, ==) with ERR_INVALID_TOKEN', () => {
+      const paddedStrings = [
+        'AQ==',
+        'AQ=',
+        'eyJhbGciOiJIUzI1NiJ9=',
+        'eyJhbGciOiJIUzI1NiJ9==',
+        'dGVzdA==',
+        'dGVzdA=',
+      ];
+      for (const padded of paddedStrings) {
+        assert.throws(
+          () => base64UrlDecode(padded),
+          (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN',
+          `Expected ${padded} to throw ERR_INVALID_TOKEN`
+        );
+      }
+    });
+
+    it('rejects base64url strings containing standard base64 characters (+, /) with ERR_INVALID_TOKEN', () => {
+      const standardB64Strings = [
+        'hello+world',
+        'foo/bar',
+        '+',
+        '/',
+        'a+b/c',
+        'aGVsbG8+d29ybGQ',
+        'aGVsbG8/d29ybGQ',
+      ];
+      for (const str of standardB64Strings) {
+        assert.throws(
+          () => base64UrlDecode(str),
+          (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN',
+          `Expected ${str} to throw ERR_INVALID_TOKEN`
+        );
+      }
+    });
+
+    it('rejects base64url strings with invalid characters (spaces, tabs, newlines, special characters)', () => {
+      const invalidCharStrings = [
+        'hello world',
+        'hello\tworld',
+        'hello\nworld',
+        'hello\r\nworld',
+        'aGVsbG8 @d29ybGQ',
+        'test!123',
+        'token#hash',
+        'data$value',
+        'percent%20',
+      ];
+      for (const str of invalidCharStrings) {
+        assert.throws(
+          () => base64UrlDecode(str),
+          (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN',
+          `Expected ${str} to throw ERR_INVALID_TOKEN`
+        );
+      }
+    });
+
+    it('rejects non-canonical trailing bits with ERR_INVALID_TOKEN', () => {
+      const nonCanonicalStrings = [
+        'A==',
+        'A',
+        'AR',
+        'aGVsbG9',
+        'dGVzdD1',
+      ];
+      for (const str of nonCanonicalStrings) {
+        assert.throws(
+          () => base64UrlDecode(str),
+          (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN',
+          `Expected ${str} to throw ERR_INVALID_TOKEN`
+        );
+      }
+    });
   });
 
   describe('setNestedProperty', () => {
@@ -321,6 +396,115 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
         (err) => err instanceof JwtError && err.code === 'ERR_INVALID_SIGNATURE'
       );
     });
+
+    it('rejects tokens with padded header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'user-padded' }, DEFAULT_SECRET, 'HS256');
+      const [h, p, s] = token.split('.');
+
+      assert.throws(
+        () => verifyJwt(`${h}=.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}==.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}=.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}==.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${s}=`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${s}==`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('rejects tokens with + or / in header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'user-std-b64' }, DEFAULT_SECRET, 'HS256');
+      const [h, p, s] = token.split('.');
+
+      assert.throws(
+        () => verifyJwt(`${h}+.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}/.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}+.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}/.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${s}+`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${s}/`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('rejects tokens with non-canonical base64url encoding in header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'user-canon' }, DEFAULT_SECRET, 'HS256', {
+        header: { kid: 'key-1' },
+      });
+      const [h, p, s] = token.split('.');
+
+      function findNonCanonical(segment) {
+        for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_') {
+          const candidate = segment.slice(0, -1) + c;
+          if (candidate !== segment) {
+            const buf = Buffer.from(candidate, 'base64url');
+            if (buf.toString('base64url') === segment) {
+              return candidate;
+            }
+          }
+        }
+        return segment + 'A';
+      }
+
+      const nonCanonH = findNonCanonical(h);
+      const nonCanonP = findNonCanonical(p);
+      const nonCanonS = findNonCanonical(s);
+
+      assert.throws(
+        () => verifyJwt(`${nonCanonH}.${p}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${nonCanonP}.${s}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => verifyJwt(`${h}.${p}.${nonCanonS}`, DEFAULT_SECRET),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('legitimate canonically-encoded tokens continue to verify cleanly', () => {
+      const token = mintMockJwt(
+        { sub: 'legit-user', role: 'Admin', tenant_id: 'tenant-1' },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+      const verified = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verified.valid, true);
+      assert.strictEqual(verified.payload.sub, 'legit-user');
+      assert.strictEqual(verified.payload.role, 'Admin');
+    });
   });
 
   describe('Expiration & Clock Tolerance / Leeway', () => {
@@ -489,6 +673,116 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
         () => decodeJwt(''),
         (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
       );
+    });
+
+    it('rejects tokens with padded header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'decode-padded' }, DEFAULT_SECRET, 'HS256');
+      const [h, p, s] = token.split('.');
+
+      assert.throws(
+        () => decodeJwt(`${h}=.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}==.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}=.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}==.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${s}=`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${s}==`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('rejects tokens with + or / in header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'decode-std-b64' }, DEFAULT_SECRET, 'HS256');
+      const [h, p, s] = token.split('.');
+
+      assert.throws(
+        () => decodeJwt(`${h}+.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}/.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}+.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}/.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${s}+`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${s}/`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('rejects tokens with non-canonical base64url encoding in header, payload, or signature with ERR_INVALID_TOKEN', () => {
+      const token = mintMockJwt({ sub: 'decode-canon' }, DEFAULT_SECRET, 'HS256', {
+        header: { kid: 'key-decode-1' },
+      });
+      const [h, p, s] = token.split('.');
+
+      function findNonCanonical(segment) {
+        for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_') {
+          const candidate = segment.slice(0, -1) + c;
+          if (candidate !== segment) {
+            const buf = Buffer.from(candidate, 'base64url');
+            if (buf.toString('base64url') === segment) {
+              return candidate;
+            }
+          }
+        }
+        return segment + 'A';
+      }
+
+      const nonCanonH = findNonCanonical(h);
+      const nonCanonP = findNonCanonical(p);
+      const nonCanonS = findNonCanonical(s);
+
+      assert.throws(
+        () => decodeJwt(`${nonCanonH}.${p}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${nonCanonP}.${s}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+      assert.throws(
+        () => decodeJwt(`${h}.${p}.${nonCanonS}`),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_TOKEN'
+      );
+    });
+
+    it('legitimate canonically-encoded tokens continue to decode cleanly', () => {
+      const token = mintMockJwt(
+        { sub: 'legit-decode-user', role: 'Editor' },
+        DEFAULT_SECRET,
+        'HS256'
+      );
+      const decoded = decodeJwt(token);
+      assert.strictEqual(decoded.header.alg, 'HS256');
+      assert.strictEqual(decoded.payload.sub, 'legit-decode-user');
+      assert.strictEqual(decoded.payload.role, 'Editor');
+      assert.strictEqual(decoded.signature, token.split('.')[2]);
     });
   });
 

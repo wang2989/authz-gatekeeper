@@ -64,7 +64,21 @@ export function base64UrlDecode(str, parseJson = false) {
     throw new JwtError('Input to base64UrlDecode must be a string', 'ERR_INVALID_INPUT');
   }
 
+  if (!/^[A-Za-z0-9_-]*$/.test(str)) {
+    throw new JwtError(
+      'Invalid base64url encoding: input contains invalid characters or padding',
+      'ERR_INVALID_TOKEN'
+    );
+  }
+
   const buf = Buffer.from(str, 'base64url');
+
+  if (buf.toString('base64url') !== str) {
+    throw new JwtError(
+      'Invalid base64url encoding: input is not canonically encoded',
+      'ERR_INVALID_TOKEN'
+    );
+  }
 
   if (parseJson === 'buffer' || (typeof parseJson === 'object' && parseJson !== null && parseJson.asBuffer === true)) {
     return buf;
@@ -428,21 +442,26 @@ export function verifyJwt(token, secretOrPublicKey, options = {}) {
 
   const signingInput = `${parts[0]}.${parts[1]}`;
   const signatureB64 = parts[2];
+
+  let actualSig;
+  try {
+    actualSig = base64UrlDecode(signatureB64, 'buffer');
+  } catch (err) {
+    throw new JwtError(`Failed to decode JWT signature: ${err.message}`, 'ERR_INVALID_TOKEN');
+  }
+
   let isSignatureValid = false;
 
   try {
     if (normAlg === 'HS256' || normAlg === 'HS384' || normAlg === 'HS512') {
       const hash = normAlg === 'HS256' ? 'sha256' : normAlg === 'HS384' ? 'sha384' : 'sha512';
       const expectedSig = crypto.createHmac(hash, secretOrPublicKey).update(signingInput).digest();
-      const actualSig = Buffer.from(signatureB64, 'base64url');
       if (expectedSig.length === actualSig.length && crypto.timingSafeEqual(expectedSig, actualSig)) {
         isSignatureValid = true;
       }
     } else if (normAlg === 'RS256') {
-      const actualSig = Buffer.from(signatureB64, 'base64url');
       isSignatureValid = crypto.verify('sha256', Buffer.from(signingInput), secretOrPublicKey, actualSig);
     } else if (normAlg === 'ES256') {
-      const actualSig = Buffer.from(signatureB64, 'base64url');
       isSignatureValid = crypto.verify(
         'sha256',
         Buffer.from(signingInput),
@@ -548,6 +567,12 @@ export function decodeJwt(token) {
     payload = base64UrlDecode(parts[1], true);
   } catch (err) {
     throw new JwtError(`Failed to decode JWT payload: ${err.message}`, 'ERR_INVALID_TOKEN');
+  }
+
+  try {
+    base64UrlDecode(parts[2], 'buffer');
+  } catch (err) {
+    throw new JwtError(`Failed to decode JWT signature: ${err.message}`, 'ERR_INVALID_TOKEN');
   }
 
   return {
