@@ -164,7 +164,7 @@ export function extractRoles(operationObj) {
  * 
  * @param {object} operationObj - OpenAPI Operation Object
  * @param {Array<object>} [rootSecurity=[]] - Global security requirements from spec root
- * @returns {{ isAnonymous: boolean, securityRequirements: Array<object>, scopesPerRequirement: Array<string[]> }}
+ * @returns {{ isAnonymous: boolean, isExplicitAnonymous: boolean, hasExplicitSecurity: boolean, securityRequirements: Array<object>, scopesPerRequirement: Array<string[]> }}
  */
 export function extractSecurity(operationObj, rootSecurity = []) {
   const globalSec = Array.isArray(rootSecurity) ? rootSecurity : [];
@@ -334,6 +334,8 @@ export function getPathItemOperations(pathItem, versionInfo = { isOpenApi32OrHig
  * @property {Array<string[]>} scopesPerRequirement - Non-flat scope groups required per alternative in securityRequirements (source of truth)
  * @property {Array<string[]>} [requiredScopes] - @deprecated Non-flat alternative scope groups. Downstream code should consume scopesPerRequirement / securityRequirements.
  * @property {boolean} isAnonymous - Whether the operation allows unauthenticated access
+ * @property {boolean} isExplicitAnonymous - Whether the operation explicitly declares anonymous access
+ * @property {boolean} hasExplicitSecurity - Whether the operation explicitly defines its own security array
  * @property {boolean} hasRequestBody - Whether requestBody is defined
  * @property {object|null} requestBodySchema - Extracted JSON/media payload schema
  */
