@@ -287,10 +287,20 @@ export function mintMockJwt(claims = {}, secretOrPrivateKey, algorithm = 'HS256'
     }
   }
 
+  const customHeaders = options.header || options.headers || {};
+  if (customHeaders.alg !== undefined && customHeaders.alg !== null) {
+    if (String(customHeaders.alg).toUpperCase() !== normAlg) {
+      throw new JwtError(
+        `Conflicting algorithm in custom header: "${customHeaders.alg}" does not match signing algorithm "${normAlg}"`,
+        'ERR_INVALID_INPUT'
+      );
+    }
+  }
+
   const header = {
     typ: 'JWT',
+    ...customHeaders,
     alg: normAlg,
-    ...(options.header || options.headers || {}),
   };
 
   const payload = { ...(claims || {}) };

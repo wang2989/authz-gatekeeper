@@ -962,6 +962,39 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
       );
     });
 
+    it('throws ERR_INVALID_INPUT if custom header specifies conflicting alg', () => {
+      assert.throws(
+        () => mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256', { header: { alg: 'RS256' } }),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+      assert.throws(
+        () => mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256', { headers: { alg: 'ES256' } }),
+        (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+
+    it('succeeds and normalizes alg if custom header alg matches case-insensitively', () => {
+      const token = mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256', { header: { alg: 'hs256' } });
+      const decoded = decodeJwt(token);
+      assert.strictEqual(decoded.header.alg, 'HS256');
+      const verified = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verified.header.alg, 'HS256');
+    });
+
+    it('preserves non-conflicting custom headers alongside authoritative alg', () => {
+      const token = mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256', {
+        header: { kid: 'my-key-id', cty: 'application/json' },
+      });
+      const decoded = decodeJwt(token);
+      assert.strictEqual(decoded.header.kid, 'my-key-id');
+      assert.strictEqual(decoded.header.cty, 'application/json');
+      assert.strictEqual(decoded.header.alg, 'HS256');
+      const verified = verifyJwt(token, DEFAULT_SECRET);
+      assert.strictEqual(verified.header.kid, 'my-key-id');
+      assert.strictEqual(verified.header.cty, 'application/json');
+      assert.strictEqual(verified.header.alg, 'HS256');
+    });
+
     it('throws ERR_INVALID_INPUT if verifyJwt has no secret or public key', () => {
       const token = mintMockJwt({ sub: 'user-1' }, DEFAULT_SECRET, 'HS256');
       assert.throws(
