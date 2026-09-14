@@ -271,6 +271,43 @@ defaults:
       assert.deepEqual(anonSets.unauthorizedRoles, []);
     });
 
+    it('unauthenticated_access: allow fallback classifies unmapped route as anonymous with empty role sets and UNMAPPED_ALLOW', () => {
+      const allowPolicy = parseAuthPolicy(`
+version: "1"
+roles:
+  - SuperAdmin
+  - OrgAdmin
+  - Member
+  - Viewer
+defaults:
+  unauthenticated_access: allow
+`);
+      const endpoints = [
+        {
+          path: '/api/v1/public-unmapped',
+          rawPath: '/api/v1/public-unmapped',
+          method: 'GET',
+          requiredRoles: [],
+          isAnonymous: false,
+          pathParameters: [],
+        },
+      ];
+
+      const report = reconcile(endpoints, allowPolicy);
+      assert.equal(report.contracts.length, 1);
+      const contract = report.contracts[0];
+
+      assert.equal(contract.ruleSource, RULE_SOURCES.UNMAPPED_ALLOW);
+      assert.equal(contract.isAnonymous, true);
+      assert.deepEqual(contract.requiredRoles, []);
+      assert.deepEqual(contract.authorizedRoles, []);
+      assert.deepEqual(contract.unauthorizedRoles, []);
+      assert.equal(report.warnings.length, 0);
+      assert.equal(report.summary.anonymousEndpoints, 1);
+      assert.equal(report.summary.protectedEndpoints, 0);
+      assert.equal(report.summary.byRuleSource[RULE_SOURCES.UNMAPPED_ALLOW], 1);
+    });
+
     it('preferPolicyOverSpec option allows matrix routes to override OpenAPI annotations', () => {
       const policy = parseAuthPolicy(basePolicyYaml);
       const endpoints = [
