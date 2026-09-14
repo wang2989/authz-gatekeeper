@@ -612,7 +612,7 @@ export function parseAuthPolicy(content) {
         throw new PolicyValidationError(`Route rule at index ${i} must be an object.`);
       }
 
-      if (!rule.path || typeof rule.path !== 'string') {
+      if (typeof rule.path !== 'string' || rule.path.trim().length === 0) {
         throw new PolicyValidationError(`Route rule at index ${i} is missing required 'path' string.`);
       }
 

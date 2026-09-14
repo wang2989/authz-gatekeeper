@@ -469,6 +469,68 @@ roles:
       );
     });
 
+    it('throws when route path is missing, non-string, or empty/whitespace-only', () => {
+      // missing path
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            routes: [{ roles: ['Admin'] }],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Route rule at index 0 is missing required 'path' string/);
+          return true;
+        }
+      );
+
+      // non-string path
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            routes: [{ path: 123, roles: ['Admin'] }],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Route rule at index 0 is missing required 'path' string/);
+          return true;
+        }
+      );
+
+      // empty path
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            routes: [{ path: '', roles: ['Admin'] }],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Route rule at index 0 is missing required 'path' string/);
+          return true;
+        }
+      );
+
+      // whitespace-only path
+      assert.throws(
+        () =>
+          parseAuthPolicy({
+            version: '1',
+            roles: ['Admin'],
+            routes: [{ path: '   ', roles: ['Admin'] }],
+          }),
+        (err) => {
+          assert.ok(err instanceof PolicyValidationError);
+          assert.match(err.message, /Route rule at index 0 is missing required 'path' string/);
+          return true;
+        }
+      );
+    });
+
     it('throws when route references an undeclared role', () => {
       assert.throws(
         () =>
