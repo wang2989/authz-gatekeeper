@@ -622,7 +622,7 @@ export function synthesizePersonaJwt(persona, jwtConfig = {}, secretOrPrivateKey
   const claims = { ...(options.claims || {}) };
 
   // 1. Role Claim
-  const roleClaim = config.role_claim || config.roleClaim || options.role_claim || options.roleClaim || 'roles';
+  const roleClaim = config.role_claim || config.roleClaim || options.role_claim || options.roleClaim || 'role';
   const shouldFormatAsArray = Boolean(options.asArray || isPluralClaim(roleClaim));
   const rawRole = persona.role ?? persona.roles;
 

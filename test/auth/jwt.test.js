@@ -975,6 +975,50 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
       assert.strictEqual(verified.header.alg, 'RS256');
       assert.strictEqual(verified.payload.role, 'SuperAdmin');
     });
+
+    it('defaults role_claim to "role" when jwtConfig is omitted or empty, maintaining parity with AuthPolicy', () => {
+      const persona = {
+        role: 'OrgAdmin',
+        tenantId: 'tenant-parity',
+        userId: 'user-parity-1',
+        isAnonymous: false,
+      };
+
+      // 1. Defaults role_claim to 'role' when omitted (undefined)
+      const tokenOmitted = synthesizePersonaJwt(persona, undefined, DEFAULT_SECRET);
+      const decodedOmitted = decodeJwt(tokenOmitted);
+      assert.strictEqual(decodedOmitted.payload.role, 'OrgAdmin');
+      assert.strictEqual(typeof decodedOmitted.payload.role, 'string');
+      assert.strictEqual(decodedOmitted.payload.roles, undefined);
+
+      // 2. Defaults role_claim to 'role' when empty object ({})
+      const tokenEmpty = synthesizePersonaJwt(persona, {}, DEFAULT_SECRET);
+      const decodedEmpty = decodeJwt(tokenEmpty);
+      assert.strictEqual(decodedEmpty.payload.role, 'OrgAdmin');
+      assert.strictEqual(typeof decodedEmpty.payload.role, 'string');
+      assert.strictEqual(decodedEmpty.payload.roles, undefined);
+
+      // 3. Token parity: Calling with {} produces exact same payload claims as calling with default AuthPolicy
+      const defaultPolicy = new AuthPolicy({ version: '1', roles: ['OrgAdmin'] });
+      const tokenPolicy = synthesizePersonaJwt(persona, defaultPolicy, DEFAULT_SECRET);
+      const decodedPolicy = decodeJwt(tokenPolicy);
+
+      assert.strictEqual(decodedEmpty.payload.role, decodedPolicy.payload.role);
+      assert.strictEqual(decodedEmpty.payload.roles, decodedPolicy.payload.roles);
+      assert.strictEqual(decodedEmpty.payload.tenant_id, decodedPolicy.payload.tenant_id);
+      assert.strictEqual(decodedEmpty.payload.sub, decodedPolicy.payload.sub);
+
+      const { jti: _jtiEmpty, iat: _iatEmpty, exp: _expEmpty, ...claimsEmpty } = decodedEmpty.payload;
+      const { jti: _jtiPolicy, iat: _iatPolicy, exp: _expPolicy, ...claimsPolicy } = decodedPolicy.payload;
+      assert.deepStrictEqual(claimsEmpty, claimsPolicy);
+      assert.deepStrictEqual(Object.keys(decodedEmpty.payload).sort(), Object.keys(decodedPolicy.payload).sort());
+
+      // Parity with deterministic claims
+      const fixedClaims = { iat: 1700000000, exp: 1700003600, jti: 'fixed-jti-parity' };
+      const tokenEmptyFixed = synthesizePersonaJwt(persona, {}, DEFAULT_SECRET, { claims: fixedClaims });
+      const tokenPolicyFixed = synthesizePersonaJwt(persona, defaultPolicy, DEFAULT_SECRET, { claims: fixedClaims });
+      assert.deepStrictEqual(decodeJwt(tokenEmptyFixed).payload, decodeJwt(tokenPolicyFixed).payload);
+    });
   });
 
   describe('Error Conditions', () => {
