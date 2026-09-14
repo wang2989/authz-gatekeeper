@@ -173,7 +173,7 @@ export function generateKeyPair(algorithm = 'RS256') {
  * Detects the key type and asymmetric algorithm family from a secret, PEM string/Buffer, or KeyObject.
  *
  * @param {string|Buffer|crypto.KeyObject} secretOrKey - Cryptographic key or secret
- * @returns {{ type: string, asymmetricKeyType: string|null }} Key type metadata
+ * @returns {{ type: string, asymmetricKeyType: string|null, asymmetricKeyDetails: object|null, namedCurve: string|null }} Key type metadata
  */
 export function detectKeyType(secretOrKey) {
   if (
@@ -183,6 +183,8 @@ export function detectKeyType(secretOrKey) {
     return {
       type: secretOrKey.type,
       asymmetricKeyType: secretOrKey.asymmetricKeyType || null,
+      asymmetricKeyDetails: secretOrKey.asymmetricKeyDetails || null,
+      namedCurve: secretOrKey.asymmetricKeyDetails?.namedCurve || null,
     };
   }
 
@@ -190,42 +192,33 @@ export function detectKeyType(secretOrKey) {
     const str = typeof secretOrKey === 'string' ? secretOrKey : secretOrKey.toString('utf8');
     if (/-----BEGIN [A-Z0-9_\- ]*(?:KEY|CERTIFICATE)-----/.test(str)) {
       try {
+        let keyObj;
         if (str.includes('PRIVATE KEY')) {
           try {
-            const privKey = crypto.createPrivateKey(secretOrKey);
-            return {
-              type: privKey.type,
-              asymmetricKeyType: privKey.asymmetricKeyType || null,
-            };
+            keyObj = crypto.createPrivateKey(secretOrKey);
           } catch {
-            const pubKey = crypto.createPublicKey(secretOrKey);
-            return {
-              type: pubKey.type,
-              asymmetricKeyType: pubKey.asymmetricKeyType || null,
-            };
+            keyObj = crypto.createPublicKey(secretOrKey);
           }
         } else {
           try {
-            const pubKey = crypto.createPublicKey(secretOrKey);
-            return {
-              type: pubKey.type,
-              asymmetricKeyType: pubKey.asymmetricKeyType || null,
-            };
+            keyObj = crypto.createPublicKey(secretOrKey);
           } catch {
-            const privKey = crypto.createPrivateKey(secretOrKey);
-            return {
-              type: privKey.type,
-              asymmetricKeyType: privKey.asymmetricKeyType || null,
-            };
+            keyObj = crypto.createPrivateKey(secretOrKey);
           }
         }
+        return {
+          type: keyObj.type,
+          asymmetricKeyType: keyObj.asymmetricKeyType || null,
+          asymmetricKeyDetails: keyObj.asymmetricKeyDetails || null,
+          namedCurve: keyObj.asymmetricKeyDetails?.namedCurve || null,
+        };
       } catch (err) {
         throw new JwtError(`Failed to parse PEM key: ${err.message}`, 'ERR_INVALID_INPUT');
       }
     }
   }
 
-  return { type: 'secret', asymmetricKeyType: null };
+  return { type: 'secret', asymmetricKeyType: null, asymmetricKeyDetails: null, namedCurve: null };
 }
 
 /**
@@ -276,6 +269,13 @@ export function mintMockJwt(claims = {}, secretOrPrivateKey, algorithm = 'HS256'
       throw new JwtError(
         'Algorithm ES256 requires an EC private key, but received a public key',
         'ERR_INVALID_INPUT'
+      );
+    }
+    const curve = keyInfo.namedCurve || keyInfo.asymmetricKeyDetails?.namedCurve;
+    if (curve !== 'prime256v1' && curve !== 'secp256r1') {
+      throw new JwtError(
+        `Algorithm ES256 requires curve P-256 (prime256v1), but received curve "${curve}"`,
+        'ERR_UNSUPPORTED_ALGORITHM'
       );
     }
   } else if (normAlg === 'HS256' || normAlg === 'HS384' || normAlg === 'HS512') {
@@ -416,6 +416,13 @@ export function verifyJwt(token, secretOrPublicKey, options = {}) {
     if (normAlg !== 'ES256') {
       throw new JwtError(
         `Algorithm "${normAlg}" is not permitted for EC keys: algorithm confusion attack detected`,
+        'ERR_UNSUPPORTED_ALGORITHM'
+      );
+    }
+    const curve = keyInfo.namedCurve || keyInfo.asymmetricKeyDetails?.namedCurve;
+    if (curve !== 'prime256v1' && curve !== 'secp256r1') {
+      throw new JwtError(
+        `Algorithm ES256 requires curve P-256 (prime256v1), but received curve "${curve}"`,
         'ERR_UNSUPPORTED_ALGORITHM'
       );
     }

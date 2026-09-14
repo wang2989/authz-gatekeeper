@@ -1118,10 +1118,32 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
       const pubInfo = detectKeyType(keyPair.publicKey);
       assert.strictEqual(pubInfo.type, 'public');
       assert.strictEqual(pubInfo.asymmetricKeyType, 'ec');
+      assert.strictEqual(pubInfo.namedCurve, 'prime256v1');
+      assert.deepStrictEqual(pubInfo.asymmetricKeyDetails, { namedCurve: 'prime256v1' });
 
       const privInfo = detectKeyType(keyPair.privateKey);
       assert.strictEqual(privInfo.type, 'private');
       assert.strictEqual(privInfo.asymmetricKeyType, 'ec');
+      assert.strictEqual(privInfo.namedCurve, 'prime256v1');
+      assert.deepStrictEqual(privInfo.asymmetricKeyDetails, { namedCurve: 'prime256v1' });
+    });
+
+    it('returns namedCurve: "prime256v1" for P-256 keys and "secp384r1" for P-384 keys', () => {
+      const p256KeyPair = generateKeyPair('ES256');
+      assert.strictEqual(detectKeyType(p256KeyPair.publicKey).namedCurve, 'prime256v1');
+      assert.strictEqual(detectKeyType(p256KeyPair.privateKey).namedCurve, 'prime256v1');
+
+      const p384KeyPair = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'secp384r1',
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      });
+      assert.strictEqual(detectKeyType(p384KeyPair.publicKey).namedCurve, 'secp384r1');
+      assert.strictEqual(detectKeyType(p384KeyPair.privateKey).namedCurve, 'secp384r1');
+
+      const p384KeyObjects = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+      assert.strictEqual(detectKeyType(p384KeyObjects.publicKey).namedCurve, 'secp384r1');
+      assert.strictEqual(detectKeyType(p384KeyObjects.privateKey).namedCurve, 'secp384r1');
     });
 
     it('identifies crypto.KeyObject instances', () => {
@@ -1130,14 +1152,39 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
       const privKeyObj = crypto.createPrivateKey(keyPair.privateKey);
       const secretKeyObj = crypto.createSecretKey(Buffer.from('test-secret'));
 
-      assert.deepStrictEqual(detectKeyType(pubKeyObj), { type: 'public', asymmetricKeyType: 'rsa' });
-      assert.deepStrictEqual(detectKeyType(privKeyObj), { type: 'private', asymmetricKeyType: 'rsa' });
-      assert.deepStrictEqual(detectKeyType(secretKeyObj), { type: 'secret', asymmetricKeyType: null });
+      assert.deepStrictEqual(detectKeyType(pubKeyObj), {
+        type: 'public',
+        asymmetricKeyType: 'rsa',
+        asymmetricKeyDetails: pubKeyObj.asymmetricKeyDetails,
+        namedCurve: null,
+      });
+      assert.deepStrictEqual(detectKeyType(privKeyObj), {
+        type: 'private',
+        asymmetricKeyType: 'rsa',
+        asymmetricKeyDetails: privKeyObj.asymmetricKeyDetails,
+        namedCurve: null,
+      });
+      assert.deepStrictEqual(detectKeyType(secretKeyObj), {
+        type: 'secret',
+        asymmetricKeyType: null,
+        asymmetricKeyDetails: null,
+        namedCurve: null,
+      });
     });
 
     it('classifies raw string and Buffer secrets as symmetric secrets', () => {
-      assert.deepStrictEqual(detectKeyType('my-hmac-shared-secret'), { type: 'secret', asymmetricKeyType: null });
-      assert.deepStrictEqual(detectKeyType(Buffer.from('my-hmac-shared-secret')), { type: 'secret', asymmetricKeyType: null });
+      assert.deepStrictEqual(detectKeyType('my-hmac-shared-secret'), {
+        type: 'secret',
+        asymmetricKeyType: null,
+        asymmetricKeyDetails: null,
+        namedCurve: null,
+      });
+      assert.deepStrictEqual(detectKeyType(Buffer.from('my-hmac-shared-secret')), {
+        type: 'secret',
+        asymmetricKeyType: null,
+        asymmetricKeyDetails: null,
+        namedCurve: null,
+      });
     });
 
     it('throws ERR_INVALID_INPUT when PEM string header is present but malformed', () => {
@@ -1176,6 +1223,40 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
       assert.throws(
         () => mintMockJwt({ sub: 'admin' }, ecKeyPair.publicKey, 'ES256'),
         (err) => err instanceof JwtError && err.code === 'ERR_INVALID_INPUT'
+      );
+    });
+
+    it('throws ERR_UNSUPPORTED_ALGORITHM when minting ES256 with non-P-256 EC key (P-384 / secp384r1)', () => {
+      const p384KeyPair = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'secp384r1',
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      });
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, p384KeyPair.privateKey, 'ES256'),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.strictEqual(
+            err.message,
+            'Algorithm ES256 requires curve P-256 (prime256v1), but received curve "secp384r1"'
+          );
+          return true;
+        }
+      );
+
+      const p384KeyObjects = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+      assert.throws(
+        () => mintMockJwt({ sub: 'admin' }, p384KeyObjects.privateKey, 'ES256'),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.strictEqual(
+            err.message,
+            'Algorithm ES256 requires curve P-256 (prime256v1), but received curve "secp384r1"'
+          );
+          return true;
+        }
       );
     });
 
@@ -1318,6 +1399,61 @@ describe('Native Mock JWT Synthesizer & Validator (src/auth/jwt.js)', () => {
         algorithm: 'RS256',
       });
       assert.strictEqual(rsaSingleAlg.valid, true);
+    });
+
+    it('rejects ES256 token verification with non-P-256 EC key (P-384 / secp384r1)', () => {
+      const p256KeyPair = generateKeyPair('ES256');
+      const validEs256Token = mintMockJwt({ sub: 'admin' }, p256KeyPair.privateKey, 'ES256');
+
+      const p384KeyPair = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'secp384r1',
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      });
+
+      assert.throws(
+        () => verifyJwt(validEs256Token, p384KeyPair.publicKey),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.strictEqual(
+            err.message,
+            'Algorithm ES256 requires curve P-256 (prime256v1), but received curve "secp384r1"'
+          );
+          return true;
+        }
+      );
+
+      const p384KeyObjects = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+      assert.throws(
+        () => verifyJwt(validEs256Token, p384KeyObjects.publicKey),
+        (err) => {
+          assert.ok(err instanceof JwtError);
+          assert.strictEqual(err.code, 'ERR_UNSUPPORTED_ALGORITHM');
+          assert.strictEqual(
+            err.message,
+            'Algorithm ES256 requires curve P-256 (prime256v1), but received curve "secp384r1"'
+          );
+          return true;
+        }
+      );
+    });
+
+    it('ensures legitimate P-256 keys (prime256v1) continue to mint and verify cleanly across formats', () => {
+      const p256KeyPair = generateKeyPair('ES256');
+      const tokenPem = mintMockJwt({ sub: 'legit-ec-user', role: 'SecAdmin' }, p256KeyPair.privateKey, 'ES256');
+      const verifiedPem = verifyJwt(tokenPem, p256KeyPair.publicKey);
+      assert.strictEqual(verifiedPem.valid, true);
+      assert.strictEqual(verifiedPem.header.alg, 'ES256');
+      assert.strictEqual(verifiedPem.payload.sub, 'legit-ec-user');
+      assert.strictEqual(verifiedPem.payload.role, 'SecAdmin');
+
+      const p256KeyObjects = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+      const tokenObj = mintMockJwt({ sub: 'legit-obj-user', role: 'SecAdmin' }, p256KeyObjects.privateKey, 'ES256');
+      const verifiedObj = verifyJwt(tokenObj, p256KeyObjects.publicKey);
+      assert.strictEqual(verifiedObj.valid, true);
+      assert.strictEqual(verifiedObj.header.alg, 'ES256');
+      assert.strictEqual(verifiedObj.payload.sub, 'legit-obj-user');
     });
 
     it('enforces caller-supplied options.algorithm restriction on mismatch', () => {
